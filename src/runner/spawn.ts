@@ -75,6 +75,9 @@ export function collectOutput(
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      // 销毁 stdio 流，避免流 pending 阻止进程退出
+      child.stdout?.destroy();
+      child.stderr?.destroy();
       if (pending.trim()) {
         lines.push(pending);
         opts.onLine?.(pending);
