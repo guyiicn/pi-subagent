@@ -1,26 +1,80 @@
 # pi-subagent
 
-把 [Pi CLI](https://pi.dev)（`@earendil-works/pi-coding-agent`）当作可被任意 MCP host 调用的**编程子代理**。提供 7 个 MCP 工具：委派任务、收割结果、调度决策、管理具名 session、中止进程。
+> Turn the [Pi CLI](https://pi.dev) (`@earendil-works/pi-coding-agent`) into a **programmable coding sub-agent** that any MCP host (ZCode, Claude Code, Cursor, …) can delegate tasks to, track sessions, and kill processes.
 
-- **进程隔离**：每次委派 = 一个 `pi -p` 子进程，Pi 崩了只影响该次调用。
-- **全 session 化**：每个任务绑定具名 session，自动续接。
-- **sync / async 双模**：默认 async（规避 host tool-call 超时），可用 `pi_status` long-poll 收割。
-- **调度决策**：`pi_plan` 纯函数，多阶段决策（否决/容量/复用/修饰/mode），可测。
-- **通用 MCP**：任何标准 MCP 客户端可加载（ZCode、Claude Code、Cursor 等）。
+`pi-subagent` is a thin MCP server that wraps `pi -p --mode json` into 7 structured tools: delegate tasks, harvest results, make scheduling decisions, manage named sessions, and abort runs. Process-isolated, fully session-based, sync/async dual-mode.
 
-## 安装
+## Why
+
+Pi is a minimal terminal coding agent. Rather than teaching Pi *methodology*, this project treats Pi as a **delegatable worker**: a host agent (ZCode / Claude Code) decides *when* to delegate, fires off a self-contained task, and harvests the result. One Pi process = one isolated sub-agent run.
+
+- **Process isolation** — each delegation spawns one `pi -p` child process. A Pi crash only affects that run.
+- **Fully session-based** — every task binds to a named session (e.g. `feat-auth`); subsequent calls auto-continue.
+- **Sync / async** — defaults to `async` (avoids host tool-call timeouts); harvest with `pi_status` long-poll.
+- **Schedulable** — `pi_plan` is a pure 5-stage decision function (reject / capacity / reuse / modify / mode), fully unit-tested.
+- **Universal MCP** — any standard MCP client can load it.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  MCP Host (ZCode / Claude Code / Pi / Cursor …)              │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ MCP (JSON-RPC over stdio)
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  pi-subagent-server  (Node/TS)                                │
+│  ┌────────────┐  ┌──────────────┐  ┌────────────────────┐   │
+│  │ Tool layer │  │ Session      │  │ Pi runner          │   │
+│  │ (7 tools)  │─▶│ registry     │─▶│ (spawn pi -p)      │   │
+│  │ + plan()   │  │ + persist    │  │ parse agent_end    │   │
+│  └─────┬──────┘  │ + _snapshot  │  │ + tool_execution   │   │
+│        │         └──────────────┘  └─────────┬──────────┘   │
+│        │                           ┌────────▼─────────┐     │
+│        └───────────────────────────│ Run registry     │     │
+│           (kill)                   │ + process-table  │     │
+│                                   └──────────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+                            │ child_process.spawn({ cwd })
+                            ▼
+                   ┌─────────────────────┐
+                   │  pi CLI (0.77+)     │
+                   └─────────────────────┘
+```
+
+Three layers with clear boundaries: **Tool layer** (MCP schema + `plan()` pure function) / **Session registry** (state + persistence + redaction) / **Runner** (spawn pi, parse NDJSON, process table).
+
+## Tools
+
+| Tool | Purpose |
+|------|---------|
+| `pi_plan` | Decide: should-delegate, sync/async, how many sessions |
+| `pi_delegate` | Dispatch a task (default async; new sessions wait for handshake) |
+| `pi_status` | Harvest a run's result (long-poll) |
+| `pi_session_list` | List sessions (omit `cwd` for the full set `pi_plan` needs) |
+| `pi_session_snapshot` | Inspect one session |
+| `pi_session_fork` | Branch a session to try another path |
+| `pi_kill` | Abort a run |
+
+### Session model
+
+- Each session has a human-readable name + Pi's UUID + `cwd` + `goal`.
+- First `pi_delegate` creates the session (`goal` required); later calls auto-continue.
+- The registry persists to `~/.pi-subagent/registry.json` (atomic write; on restart, interrupted `running` records are corrected to `error`).
+- Concurrency cap: **4** running runs; a single session is never run concurrently.
+
+## Install
 
 ```bash
 git clone <this-repo> && cd pi-subagent
 npm install
-npm run build   # 可选；运行用 tsx 即可
 ```
 
-前置：已安装 `pi` CLI（`npm i -g @earendil-works/pi-coding-agent`）。
+Prerequisite: the `pi` CLI is installed (`npm i -g @earendil-works/pi-coding-agent`) and on `PATH`.
 
-## 配置 MCP host
+## Configure an MCP host
 
-在 MCP 客户端配置里加：
+Add to your MCP client config:
 
 ```json
 {
@@ -33,42 +87,51 @@ npm run build   # 可选；运行用 tsx 即可
 }
 ```
 
-可选环境变量：
-- `PI_SUBAGENT_REGISTRY`：session 注册表路径（默认 `~/.pi-subagent/registry.json`）。
-- `PI_BIN`：覆盖 pi 可执行路径（测试用）。
+Optional env vars:
+- `PI_SUBAGENT_REGISTRY` — registry path (default `~/.pi-subagent/registry.json`)
+- `PI_BIN` — override the pi executable (used by tests)
 
-## 工具
-
-| 工具 | 用途 |
-|------|------|
-| `pi_plan` | 决策：该不该委派、sync/async、开几个 session |
-| `pi_delegate` | 派任务（默认 async；新 session 等握手后返回） |
-| `pi_status` | 收割 run 结果（long-poll） |
-| `pi_session_list` | 列 session（不传 cwd 取全量） |
-| `pi_session_snapshot` | 看 session 详情 |
-| `pi_session_fork` | 从已有 session 派生（试另一条路） |
-| `pi_kill` | 中止 run |
-
-## Session 模型
-
-- 每个 session 有人类可读名（如 `feat-auth`）+ pi 的 UUID + cwd + goal。
-- 首次 `pi_delegate` 创建 session（必须传 `goal`），后续自动续接。
-- session 注册表持久化到 `~/.pi-subagent/registry.json`（原子写，重启加载时修正中断的 running）。
-- 并发上限 4 个 running run；同一 session 不并发。
-
-## 测试
+## Test
 
 ```bash
-npm test           # 全量（79 个测试）
-npm run test:fast  # dot 格式
+npm test           # full suite (79 tests)
+npm run test:fast  # dot reporter
 ```
 
-测试用假 pi（`test/fixtures/fake-pi.sh`）覆盖：async/sync、超时、kill、session 创建失败、多等待者、progress 上限、调度规则、持久化等。
+Tests use a fake pi (`test/fixtures/fake-pi.sh`) and cover: async/sync, timeout, kill, session-create-failure, multi-waiter, progress cap, scheduling rules (table-driven + 100-iteration property tests), registry persistence, redaction, etc.
 
-## 设计文档
+## Project layout
 
-- 完整设计 spec：`docs/superpowers/specs/2026-07-01-pi-subagent-design.md`（经 4 轮评审）
-- 实现计划：`docs/superpowers/plans/2026-07-01-pi-subagent.md`
+```
+src/
+├── types.ts                 # all shared types + error codes
+├── errors.ts                # ToolError helpers
+├── runner/                  # parse.ts, argv.ts, spawn.ts, process-table.ts
+├── registry/                # session.ts, run.ts, persist.ts, redact.ts
+├── scheduler/               # keywords.ts, plan.ts (5-stage pure function)
+├── tools/                   # delegate, status, plan-tool, session, kill
+└── server.ts                # MCP entry (stdio)
+skills/pi-subagent/          # SKILL.md + delegation-patterns (strategy layer)
+test/                        # fixtures/ + *.test.ts
+docs/                        # design.md (spec) + implementation-plan.md
+```
+
+## Design & process
+
+This project went through collaborative design + 4 rounds of external review before implementation. The spec and plan are committed under `docs/`:
+
+- **[`docs/design.md`](docs/design.md)** — full design spec (architecture, tool contracts, error handling, scheduler rules, testing strategy). Every contract is traceable to a review note (`R1`–`R4`).
+- **[`docs/implementation-plan.md`](docs/implementation-plan.md)** — 19 TDD tasks (write failing test → implement → pass → commit).
+
+Key design decisions, all backed by real probing of `pi -p` output and external review:
+- **`cwd` ≠ session storage** — `spawn({ cwd })` controls the working dir; Pi's session files use their default location (doesn't pollute the project).
+- **async default + handshake** — new sessions wait for Pi's `session` event before returning (with a `sessionStartTimeoutMs`), so the host always gets a real `piSessionId`.
+- **Multi-stage scheduler** — `plan()` is reject → capacity → reuse → modify → mode, where modifiers stack rather than first-match (a lesson from review round 1).
+- **Progress redaction** — tool results are truncated + scrubbed for tokens/keys before being stored.
+
+## Status
+
+Working implementation, 79 passing tests. Not yet published to npm — run from source via `tsx`.
 
 ## License
 
