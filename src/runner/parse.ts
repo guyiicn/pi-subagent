@@ -1,4 +1,5 @@
 import type { ProgressEvent, Usage } from "../types.js";
+import { redact } from "../registry/redact.js";
 
 // 分类后的事件（只保留关心的）
 export interface PiEvent {
@@ -74,7 +75,7 @@ export function extractResult(lines: string[]): Extracted {
     const ev = classifyLine(line);
     if (!ev) continue;
     if (ev.type === "tool_execution_end" && ev.toolResultText) {
-      progress.push({ ts: Date.now(), tool: ev.toolName, summary: truncate(ev.toolResultText) });
+      progress.push({ ts: Date.now(), tool: ev.toolName, summary: redact(ev.toolResultText) });
     } else if (ev.type === "agent_end") {
       usage = ev.usage;
       result = extractFinalAssistantText(ev.messages);
@@ -94,8 +95,4 @@ export function extractFinalAssistantText(messages?: PiEvent["messages"]): strin
     }
   }
   return null;
-}
-
-function truncate(s: string, n = 200): string {
-  return s.length <= n ? s : s.slice(0, n);
 }
