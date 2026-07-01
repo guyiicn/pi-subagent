@@ -126,7 +126,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     let result: unknown;
     switch (req.params.name) {
       case "pi_delegate":
-        result = await delegate(args, { sessions, runs, procs });
+        result = await delegate(args, { sessions, runs, procs, onSessionChange: persist });
         break;
       case "pi_status":
         result = await status(args, runs);

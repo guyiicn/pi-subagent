@@ -37,6 +37,7 @@ export interface CollectResult {
   stderrTail: string;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
+  spawnError?: Error;   // spawn 失败（如 PI_BIN 不存在）
 }
 
 // 逐行读 child.stdout，回调每行；返回结束 promise（含 exitCode/signal）
@@ -50,6 +51,7 @@ export function collectOutput(
     let pending = "";
     let timer: NodeJS.Timeout | undefined;
     let settled = false;
+    let spawnError: Error | undefined;
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
@@ -82,10 +84,18 @@ export function collectOutput(
         lines.push(pending);
         opts.onLine?.(pending);
       }
-      resolve({ lines, stderrTail: stderrBuf.slice(-2048), exitCode, signal });
+      resolve({ lines, stderrTail: stderrBuf.slice(-2048), exitCode, signal, spawnError });
     };
 
     child.once("exit", (code, sig) => done(code, sig));
+
+    // spawn 失败（如 PI_BIN 不存在/不可执行）：发 error，可能不发 exit。
+    // close 兜底：进程退出后流关闭也会触发，确保 done 一定被调用。
+    child.once("error", (err) => {
+      spawnError = err;
+      done(null, null);
+    });
+    child.once("close", (code, sig) => done(code, sig));
 
     if (opts.runTimeoutMs) {
       timer = setTimeout(() => {

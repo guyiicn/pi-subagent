@@ -29,6 +29,8 @@ export interface DelegateDeps {
   sessions: SessionRegistry;
   runs: RunRegistry;
   procs: ProcessTable;
+  // session 状态变更后的持久化钩子（async finalize 完成时调用，避免 registry 文件 stale）
+  onSessionChange?: () => void;
 }
 
 export interface DelegateOutput {
@@ -111,7 +113,15 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
     let status: "completed" | "error" | "timeout" | "killed" = "completed";
     let error: any;
 
-    if (!state.sessionIdReceived && isCreate) {
+    if (res.spawnError) {
+      // spawn 失败（PI_BIN 不存在/不可执行）——进程根本没起来
+      status = "error";
+      error = {
+        code: !state.sessionIdReceived && isCreate ? ERROR_CODES.SESSION_CREATE_FAILED : ERROR_CODES.NONZERO_EXIT,
+        message: `spawn failed: ${res.spawnError.message}`,
+      };
+      // 不创建 SessionRecord（若是新 session）
+    } else if (!state.sessionIdReceived && isCreate) {
       // 新 session 没拿到 session 事件
       if (res.signal === "SIGTERM" || res.signal === "SIGKILL") {
         status = "error";
@@ -162,11 +172,14 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
       } else {
         deps.sessions.clearRunning(
           input.session, "error", endedAt,
-          error ? { code: error.code, message: error.message, runId: run.runId } : undefined,
+          error ? { code: error.code, message: error.message, runId: run.runId, ts: endedAt } : undefined,
         );
       }
       for (const p of progress) deps.sessions.appendProgress(input.session, p);
     }
+
+    // 触发持久化（Medium #3：async finalize 完成时也要落盘，避免 registry stale）
+    deps.onSessionChange?.();
 
     return { status, result: result ?? undefined, error, usage, progress, progressTruncated: false };
   };

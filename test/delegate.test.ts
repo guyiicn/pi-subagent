@@ -105,3 +105,29 @@ test("并发第 5 个 → resource_busy", async () => {
   });
   c.cleanup();
 });
+
+test("PI_BIN 不存在 → session_create_failed，不挂起", async () => {
+  const c = tmpCwd();
+  await withEnv({ PI_BIN: "/no/such/pi-binary", FAKE_PI_MODE: "success" }, async () => {
+    const d = deps();
+    const r = await delegate({ prompt: "hi", session: "s1", cwd: c.dir, goal: "g", mode: "async" }, d);
+    assert.equal(r.status, "error");
+    assert.equal(r.error?.code, "session_create_failed");
+    assert.equal(d.sessions.has("s1"), false);
+    await drain(d);
+  });
+  c.cleanup();
+});
+
+test("async finalize 完成后触发 onSessionChange（持久化钩子）", async () => {
+  const c = tmpCwd();
+  await withEnv(fakePiEnv("success"), async () => {
+    let changeCalls = 0;
+    const d = { ...deps(), onSessionChange: () => { changeCalls++; } };
+    await delegate({ prompt: "hi", session: "s1", cwd: c.dir, goal: "g", mode: "async" }, d);
+    // 等 finalize 跑完
+    await drain(d);
+    assert.ok(changeCalls >= 1, `onSessionChange 应被调用，实际 ${changeCalls}`);
+  });
+  c.cleanup();
+});
