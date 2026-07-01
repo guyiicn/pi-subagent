@@ -1,0 +1,21 @@
+{
+  "name": "pi-subagent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "pi-subagent": "./dist/server.js" },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --import tsx --test --test-reporter=spec test/*.test.ts",
+    "test:fast": "node --import tsx --test --test-reporter=dot test/*.test.ts",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0"
+  },
+  "devDependencies": {
+    "tsx": "4.22.4",
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0"
+  }
+}
