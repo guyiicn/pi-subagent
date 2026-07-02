@@ -6,26 +6,34 @@ import { SessionRegistry } from "./registry/session.js";
 import { RunRegistry } from "./registry/run.js";
 import { ProcessTable } from "./runner/process-table.js";
 import { loadRegistry, saveRegistry } from "./registry/persist.js";
+import { loadTasks, saveTasks } from "./registry/task-persist.js";
+import { TaskRegistry } from "./registry/task.js";
 import { delegate } from "./tools/delegate.js";
 import { status } from "./tools/status.js";
 import { planTool } from "./tools/plan-tool.js";
 import { sessionList, sessionSnapshot, sessionFork } from "./tools/session.js";
 import { kill } from "./tools/kill.js";
+import { taskCreate, taskList, taskPlan, taskStageRun, applyReviewResult } from "./tools/task.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
 const REGISTRY_PATH =
   process.env.PI_SUBAGENT_REGISTRY ?? join(homedir(), ".pi-subagent", "registry.json");
+const TASKS_PATH =
+  process.env.PI_SUBAGENT_TASKS ?? join(homedir(), ".pi-subagent", "tasks.json");
 
 const sessions = new SessionRegistry();
 const runs = new RunRegistry();
 const procs = new ProcessTable();
+const tasks = new TaskRegistry();
 
 // 启动加载
 const loaded = loadRegistry(REGISTRY_PATH);
 sessions.loadAll(loaded.sessions);
+const loadedTasks = loadTasks(TASKS_PATH);
+tasks.loadAll(loadedTasks.tasks);
 
-// 持久化钩子：session 变更后落盘
+// session 持久化钩子
 let savePending = false;
 function persist() {
   if (savePending) return;
@@ -35,6 +43,18 @@ function persist() {
     saveRegistry(REGISTRY_PATH, sessions.allPersistable()).catch(() => undefined);
   });
 }
+
+// task 持久化钩子
+let taskSavePending = false;
+function persistTasks() {
+  if (taskSavePending) return;
+  taskSavePending = true;
+  queueMicrotask(() => {
+    taskSavePending = false;
+    saveTasks(TASKS_PATH, tasks.allPersistable()).catch(() => undefined);
+  });
+}
+tasks.setPersistHook(persistTasks);
 
 const server = new Server(
   { name: "pi-subagent", version: "0.1.0" },
@@ -117,6 +137,62 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["runId"],
       },
     },
+    {
+      name: "pi_task_create",
+      description: "建任务（host 已写好 _plan-draft.md）",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          goal: { type: "string" },
+          cwd: { type: "string" },
+          planDraftPath: { type: "string" },
+          stages: { type: "array" },
+        },
+        required: ["taskId", "goal", "cwd", "planDraftPath", "stages"],
+      },
+    },
+    {
+      name: "pi_task_plan",
+      description: "派审阅 Pi 审阅计划草案（两步拆解第2步）",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          constraints: { type: "object" },
+          stallTimeoutMs: { type: "number" },
+          runTimeoutMs: { type: "number" },
+        },
+        required: ["taskId"],
+      },
+    },
+    {
+      name: "pi_task_stage_run",
+      description: "执行某阶段（含验收+最多3次重派+manual升级）",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          stageId: { type: "string" },
+          constraints: { type: "object" },
+          stallTimeoutMs: { type: "number" },
+          runTimeoutMs: { type: "number" },
+          maxAttempts: { type: "number" },
+        },
+        required: ["taskId", "stageId"],
+      },
+    },
+    {
+      name: "pi_task_list",
+      description: "列任务（可按 taskId/status 过滤）",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          status: { type: "string", enum: ["planning", "executing", "blocked_manual", "completed", "abandoned"] },
+        },
+      },
+    },
   ],
 }));
 
@@ -145,6 +221,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         break;
       case "pi_kill":
         result = kill(args, { runs, procs, sessions });
+        break;
+      case "pi_task_create":
+        result = taskCreate(args, { tasks, sessions, runs, procs, onTaskChange: persistTasks });
+        break;
+      case "pi_task_plan": {
+        const r = await taskPlan(args, { tasks, sessions, runs, procs, onTaskChange: persistTasks });
+        // async：host 之后用 pi_status(runId) 收割，收割后应调 applyReviewResult 解析 verdict
+        result = r;
+        break;
+      }
+      case "pi_task_stage_run":
+        result = await taskStageRun(args, { tasks, sessions, runs, procs, onTaskChange: persistTasks });
+        break;
+      case "pi_task_list":
+        result = taskList({ tasks, sessions, runs, procs }, { taskId: args.taskId, status: args.status });
         break;
       default:
         return {
