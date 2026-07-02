@@ -16,8 +16,8 @@ export function buildStagePrompt(
   prevFailure?: PrevFailure,
 ): string {
   const abs = (p: string) => join(task.cwd, p);
-  const inputs = stage.inputFiles.map(abs);
-  const output = abs(stage.outputFile);
+  const inputs = (stage.inputFiles ?? []).map(abs);   // 防御 undefined
+  const output = abs(stage.outputFile ?? "output.txt");
 
   const lines: string[] = [];
   lines.push("【输入】读以下文件获取上下文（不要联网，资料已提供）：");
@@ -31,7 +31,12 @@ export function buildStagePrompt(
   lines.push("【约束】");
   lines.push("- 不要联网搜索，所有需要的资料已在输入文件中。");
   lines.push(`- 只写这一个文件：${output}。不要修改其他任何文件。`);
-  lines.push("- 先用 write 工具创建文件骨架落盘，再逐步填充。不要等全部想好再写。");
+  lines.push("");
+  lines.push("【工作节奏（必须遵守，否则会被判停滞中止）】");
+  lines.push("- 第1步：read 输入文件。");
+  lines.push("- 第2步：立即用 write 创建文件骨架（空结构 + 各小节标题），不要先想完整内容。");
+  lines.push("- 第3步起：用 edit 每次只填充 1 个小节，连续做直到填完。");
+  lines.push("- 每个 edit/write/read 都是独立 tool 调用，中间绝不要长时间纯思考——频繁调用工具保持进度。");
   if (stage.promptHint) lines.push(`- 特别注意：${stage.promptHint}`);
 
   // 升级指令（attempt > 1）

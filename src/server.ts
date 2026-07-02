@@ -147,7 +147,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           goal: { type: "string" },
           cwd: { type: "string" },
           planDraftPath: { type: "string" },
-          stages: { type: "array" },
+          stages: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                stageId: { type: "string" },
+                title: { type: "string" },
+                objective: { type: "string" },
+                goal: { type: "string" },
+                inputFiles: { type: "array", items: { type: "string" } },
+                outputFile: { type: "string" },
+                dependsOn: { type: "array", items: { type: "string" } },
+                parallelizable: { type: "boolean" },
+                promptHint: { type: "string" },
+                validateRules: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      kind: { type: "string", enum: ["file_exists", "file_nonempty", "contains", "not_contains", "regex"] },
+                      pattern: { type: "string" },
+                    },
+                  },
+                },
+              },
+              required: ["stageId", "outputFile"],
+            },
+          },
         },
         required: ["taskId", "goal", "cwd", "planDraftPath", "stages"],
       },

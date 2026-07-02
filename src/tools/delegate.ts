@@ -9,6 +9,7 @@ import { ERROR_CODES, PI_BUILTIN_TOOLS, type Constraints, type Snapshot, type Pr
 
 const MAX_CONCURRENCY = 4;
 const SESSION_START_TIMEOUT_MS = 10000;
+// 批次2 修复: stallTimeoutMs 默认调大到 300s（Pi 生成长内容时思考阶段无 tool 调用，120s 太激进）
 
 // pi_kill 主动标记的 runId（区分超时 kill vs 手动 kill）
 const manualKills = new Set<string>();
@@ -265,8 +266,9 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
     }, SESSION_START_TIMEOUT_MS).unref?.();
   }
 
-  // 批次1: 停滞检测——周期检查 lastProgressAt，无进展超 stallTimeoutMs 则 kill+标 stalled
-  const stallTimeoutMs = input.stallTimeoutMs ?? 120000;
+  // 批次1+2: 停滞检测——周期检查 lastProgressAt，无进展超 stallTimeoutMs 则 kill+标 stalled
+  // 默认 300s（Pi 生成长内容时思考阶段无 tool 调用，120s 易误判）
+  const stallTimeoutMs = input.stallTimeoutMs ?? 300000;
   const stallChecker = setInterval(() => {
     const r = deps.runs.get(run.runId);
     if (!r || r.status !== "running") {

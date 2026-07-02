@@ -28,9 +28,18 @@ export class TaskRegistry {
   }): Task {
     if (this.map.has(input.taskId)) throw Errors.taskConflict(input.taskId);
     const now = Date.now();
+    // 补默认字段（防 host 传的 stage 缺字段导致后续 map/filter 崩）
     const stages: Stage[] = input.stages.map((s) => ({
-      ...s,
-      status: "pending",
+      stageId: s.stageId,
+      title: s.title ?? "",
+      objective: s.objective ?? s.goal ?? "",   // 兼容 host 用 goal 而非 objective
+      inputFiles: s.inputFiles ?? [],
+      outputFile: s.outputFile ?? "",
+      dependsOn: s.dependsOn ?? [],
+      parallelizable: s.parallelizable ?? false,
+      promptHint: s.promptHint,
+      validateRules: s.validateRules,
+      status: "pending" as const,
       attempts: [],
     }));
     const task: Task = {

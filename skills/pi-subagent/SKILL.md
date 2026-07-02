@@ -86,6 +86,24 @@ metadata:
 - ❌ 委派后不读结果 —— 每阶段看 outcome，failed/manual 要处理。
 - ❌ stage 失败原样重跑 —— 工具已自动按 failureType 升级 prompt，但你要看 manual 面板决策。
 
+## 重要行为说明（实测得出）
+
+**status 轮询（应对 host 30s 工具超时）：**
+MCP host（ZCode）对单次工具调用有 30s 硬超时。`pi_status` 默认 `waitTimeoutMs=25000`（低于上限）。
+- async delegate 后，反复调 `pi_status(runId)` 收割，每次最多等 25s。
+- **不要**给 `waitTimeoutMs>28000`——会被 host 掐断成"Tool execution timed out"。
+- 收割到 status 非 running（completed/error/stalled/killed）即结束。
+
+**session 复用与隔离：**
+- 同名 session 多次 delegate 会**累积 progress**（session 是连续对话）。
+- **重派失败任务时用新 session 名**（如 `math-2`、`frontier-3`），避免历史 progress 混入。
+- `pi_status(runId)` 返回的是**单次 run 的 progress**（Run 级隔离），不受 session 历史影响——优先用 runId 收割。
+
+**stall 与长内容生成：**
+- Pi 生成长内容（>5KB HTML）时，"构思全文"阶段无 tool 调用，可能被判 stalled。
+- 工具已在 stage prompt 强制"先骨架→逐节 edit"节奏（每步都调 tool 保持进度）。
+- 若仍 stall，传 `stallTimeoutMs` 调大（默认已 300s）。
+
 ## 失败处理（manual 面板）
 
 stage 连续 3 次失败 → `pi_task_stage_run` 返回 `outcome:manual` + 决策面板：

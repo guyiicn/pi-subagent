@@ -35,8 +35,9 @@ export async function status(input: StatusInput, runs: RunRegistry): Promise<Sta
   if (!existing && runs.isExpired(input.runId)) throw Errors.runExpired(input.runId);
   if (!existing) throw Errors.notFound(`run ${input.runId}`);
 
-  // long-poll：waitTimeoutMs=0 或不传 → 立即返回当前 running 状态
-  const waitMs = input.waitTimeoutMs ?? 0;
+  // long-poll：waitTimeoutMs 默认 25000（低于 host 工具调用硬超时 30s，确保 host 不掐断）
+  // 传 0 → 立即返回当前 running（纯轮询）
+  const waitMs = input.waitTimeoutMs ?? 25000;
   if (waitMs === 0) {
     return { runId: input.runId, session: existing.session, status: "running" };
   }

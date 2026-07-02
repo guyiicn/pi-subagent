@@ -199,9 +199,17 @@ export interface ManualPanel {
   options: ["retry_with_new_hint", "skip", "abort_task", "manual_write"];
 }
 
-// stage 执行时 host 给的创建参数（Pick 自 Stage）
-export type StageCreateInput = Pick<
-  Stage,
-  "stageId" | "title" | "objective" | "inputFiles" | "outputFile" | "dependsOn" | "parallelizable" | "promptHint" | "validateRules"
->;
+// stage 执行时 host 给的创建参数（Pick 自 Stage，goal 为 objective 别名兼容）
+export interface StageCreateInput {
+  stageId: string;
+  title?: string;
+  objective?: string;
+  goal?: string;             // objective 的别名（host 可能用 goal）
+  inputFiles?: string[];
+  outputFile: string;
+  dependsOn?: string[];
+  parallelizable?: boolean;
+  promptHint?: string;
+  validateRules?: ValidateRule[];
+}
 
