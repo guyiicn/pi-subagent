@@ -77,11 +77,18 @@ export function collectOutput(
       stderrBuf += chunk;
       if (stderrBuf.length > 4096) stderrBuf = stderrBuf.slice(-2048);  // 保留末 2KB
     });
+    // 流级 'error' 监听：管道在 destroy()/子进程被 kill 时可能发 'error'（EPIPE 等）。
+    // 若无监听器，Node 会把它升级成 uncaughtException 直接崩掉整个 server（并发下高发）。
+    // 这些错误对结果无影响，吞掉即可。
+    child.stdout?.on("error", () => undefined);
+    child.stderr?.on("error", () => undefined);
 
+    let killTimer: NodeJS.Timeout | undefined;
     const done = (exitCode: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);  // 清理 SIGKILL 宽限定时器，避免悬挂
       // 销毁 stdio 流，避免流 pending 阻止进程退出
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -105,8 +112,8 @@ export function collectOutput(
     if (opts.runTimeoutMs) {
       timer = setTimeout(() => {
         if (!child.killed) child.kill("SIGTERM");
-        // grace 5s 后 SIGKILL
-        setTimeout(() => {
+        // grace 5s 后 SIGKILL（定时器句柄保存，done() 里会清理）
+        killTimer = setTimeout(() => {
           if (!child.killed) child.kill("SIGKILL");
         }, 5000);
       }, opts.runTimeoutMs);
