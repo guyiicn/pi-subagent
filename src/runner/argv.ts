@@ -14,6 +14,9 @@ export function buildDelegateArgs(input: DelegateArgsInput): string[] {
   if (c.excludeTools?.length) args.push("--exclude-tools", c.excludeTools.join(","));
   if (c.thinking) args.push("--thinking", c.thinking);
   if (c.model) args.push("--model", c.model);
+  // 批次2: 禁 skill / context-files（防 UltimateSearch 等联网诱导）
+  if (c.noSkills) args.push("--no-skills");
+  if (c.noContextFiles) args.push("--no-context-files");
   // v1 不传: --session-dir, --provider, --append-system-prompt (spec §11)
   return args;
 }

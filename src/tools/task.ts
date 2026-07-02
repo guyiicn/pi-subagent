@@ -66,7 +66,8 @@ export async function taskPlan(
 
   // 写 _refs.md 占位提示（若不存在不强制）
   const prompt = buildReviewPrompt(task);
-  const constraints = input.constraints ?? { excludeTools: ["bash"] };  // 默认禁危险工具，web 工具名批次2实测后补
+  // 批次2: 默认禁 skill（防 UltimateSearch 等联网诱导）。审阅不需要 bash 写盘外的东西
+  const constraints = input.constraints ?? { noSkills: true, noContextFiles: true };
 
   const r = await delegate(
     {
@@ -139,7 +140,8 @@ export async function taskStageRun(
   }
 
   const maxAttempts = input.maxAttempts ?? 3;
-  const constraints = input.constraints ?? { excludeTools: ["bash"] };
+  // 批次2: 默认禁 skill（防联网诱导），保留 bash 让 Pi 写文件
+  const constraints = input.constraints ?? { noSkills: true, noContextFiles: true };
   const sessionName = stage.session ?? `${input.taskId}-${input.stageId}`;
   deps.tasks.setStageStatus(input.taskId, input.stageId, "running", sessionName);
 

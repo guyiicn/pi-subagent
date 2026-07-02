@@ -4,6 +4,8 @@ export interface Constraints {
   excludeTools?: string[];   // → pi --exclude-tools 黑名单
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   model?: string;
+  noSkills?: boolean;        // 批次2: → pi --no-skills，禁所有 skill（含 UltimateSearch 等联网诱导）。默认 false
+  noContextFiles?: boolean;  // 批次2: → pi --no-context-files，禁 AGENTS.md/CLAUDE.md。默认 false
 }
 
 // ===== 内置 Pi 工具名 (R3#7) =====

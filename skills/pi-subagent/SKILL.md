@@ -1,49 +1,97 @@
 ---
 name: pi-subagent
-version: 1.0.0
-description: "委派编程任务给 Pi 子代理执行。当需要把独立子任务交给另一个 agent（探索代码库、实现隔离功能、并行 fan-out、危险操作隔离执行）时使用。提供同步/异步委派与 session 生命周期管理。"
+version: 2.0.0
+description: "把 Pi 当编程子代理，按任务编排协议委派工作。host 拆任务→Pi 领域审阅→分阶段执行（禁联网、磁盘契约、3次重派、停滞兜底）。用于生成文档/课件、实现多模块功能、并行探索等可拆分的编程任务。"
 metadata:
   requires:
     mcps: ["pi-subagent"]
 ---
 
-# pi-subagent (v1)
+# pi-subagent v2 — 任务编排协议
 
-委派编程任务给 Pi 子代理。子代理在你指定的 cwd 里独立工作，进程隔离，结果可收割。
+把 Pi 当作**可委派的编程子代理**。核心思想：host 负责**拆分 + 不可控 I/O（联网）**，Pi 负责**可控的编码/写作**（禁联网、专注落盘）。
 
-## 标准流程
+## 三条铁律（必须遵守）
 
-拿到任务后：
-1. 调 `pi_session_list` **不传 cwd，取全量 existingSessions**（全局 runningCount 才能正确反映并发；pi_plan 内部用全量算并发、用 input.cwd 做复用过滤）。
-2. 调 `pi_plan` 获取执行计划（shouldDelegate / mode / sessions）。
-3. `shouldDelegate=false` → 自己做；否则严格按计划的 mode 和 sessions 调 `pi_delegate`，不要自行改 mode。
-4. async：发起后用短 `pi_status(waitTimeoutMs:30000)` 反复收割，直到 status 为 completed/error/timeout/killed；综合 result 决策。
+1. **不可控 I/O 收回 host（C 模式）**：联网搜索、外部 API 调用由 host（你/ZCode）做，结果写进任务目录的 `_refs.md`。**绝不让 Pi 自己联网**——它会绕圈（实测：UltimateSearch skill 会诱导 Pi 反复搜索）。
+2. **大任务必须拆分（B 模式）**：不要一次性委派"生成整个课件"。用 `pi_task_create` 拆成阶段，每阶段产出独立文件，host 在阶段间验证。
+3. **Pi 执行阶段禁 skill**：`pi_task_plan` / `pi_task_stage_run` 默认 `noSkills:true`（防联网诱导）。保留 bash/read/edit/write 让 Pi 干活。
+
+## 标准任务流程（6 步）
+
+```
+1. host 判断：要不要外部数据？
+   ├─ 要 → host 自己联网（WebSearch/webReader）→ 写 <cwd>/_refs.md
+   └─ 不要 → 跳过
+
+2. host 拆任务为阶段 → 写 <cwd>/_plan-draft.md（章节划分 + 每阶段目标/输入/输出/依赖）
+
+3. pi_task_create(taskId, goal, cwd, planDraftPath, stages)
+   → 任务建立，status=planning
+
+4. pi_task_plan(taskId)  ← 两步拆解第2步：派 Pi 领域审阅
+   → async 返回 runId
+   → pi_status(runId) 收割 → Pi 产出 _plan-reviewed.md（含 verdict）
+   → host 读 verdict：approve / approve_with_changes / reject
+   → host 决定：接受修改建议就改 stages（pi_task 不自动改），否则按原计划
+
+5. 依次（或并行）pi_task_stage_run(taskId, stageId)
+   → 工具内部：delegate(禁skill) → 验收 → 失败按类型升级重派(最多3次) → 3次失败进 manual
+   → 返回 outcome: passed | manual
+
+6. 全部 stage passed → task completed
+   若某 stage manual → task blocked_manual，工具返回决策面板，host 呈现给人
+```
+
+## IOAC prompt 原则（工具已内置，理解即可）
+
+每个阶段的 Pi prompt 由工具按 IOAC 模板生成：
+- **Input**：读哪些文件（绝对路径，替代 Pi 的"记忆"）
+- **Objective**：这阶段产出什么（一句话可验证）
+- **Action 约束**：禁联网、只写 outputFile、先落盘骨架
+- **Check**：验收规则（文件存在+非空+无TODO，或 host 给的 validateRules）
+
+你（host）在 `pi_task_create` 的 stages 里给 `promptHint`（领域要点），工具会注入 Action 段。
+
+## 命名约定
+
+| 对象 | 约定 | 示例 |
+|------|------|------|
+| taskId | `<topic>` | `attention-courseware` |
+| 文件 | `_plan-draft.md` / `_plan-reviewed.md` / `_refs.md` / `<stageId>-<slug>.html` | `02-scaled.html` |
+
+## 工具速查（11 个）
+
+**任务编排（v2 新增，优先用）：**
+| 工具 | 用途 |
+|------|------|
+| pi_task_create | 建任务（host 已写 _plan-draft.md） |
+| pi_task_plan | 派 Pi 审阅计划（两步拆解第2步） |
+| pi_task_stage_run | 执行阶段（含验收+3次重派+manual） |
+| pi_task_list | 看任务全貌（可按 taskId/status 过滤） |
+
+**底层工具（task 工具内部用，也可直接调）：**
+| 工具 | 用途 |
+|------|------|
+| pi_delegate | 派单个任务（默认 async） |
+| pi_status | 收割 run 结果（long-poll） |
+| pi_kill | 中止 run |
+| pi_plan | 简单调度决策（该不该委派/几个session） |
+| pi_session_list / pi_session_snapshot / pi_session_fork | session 管理 |
 
 ## 反模式（禁止）
 
-- ❌ 模糊任务甩锅（"看看这项目"）— 子代理会迷失。要么自己先明确任务边界，要么不委派。
-- ❌ 高频人工判断的精修任务委派 — 往返成本高。
-- ❌ 委派后不读结果 — 必须读 result 并据此决策。
-- ❌ 使用 allowUnknownTools — 该参数仅手工低层逃生，策略层禁用。
+- ❌ 让 Pi 自己联网（用 UltimateSearch 等）—— 会绕圈。host 先做 I/O 写 _refs.md。
+- ❌ 一次性委派大任务不拆 —— 用 pi_task_create 拆阶段。
+- ❌ 委派后不读结果 —— 每阶段看 outcome，failed/manual 要处理。
+- ❌ stage 失败原样重跑 —— 工具已自动按 failureType 升级 prompt，但你要看 manual 面板决策。
 
-## prompt 自包含原则
+## 失败处理（manual 面板）
 
-委派的 prompt 必须自包含（子代理看不到我们的对话上下文）：
-- **目标**：要完成什么（一句话可验证的成功标准）
-- **上下文**：相关文件路径、已知约束
-- **边界**：不要碰什么
-- **交付要求**：返回什么（结论格式 / 改了哪些文件 / 测试是否过）
+stage 连续 3 次失败 → `pi_task_stage_run` 返回 `outcome:manual` + 决策面板：
+- `retry_with_new_hint`：你改 stage 的 promptHint 再调 stage_run
+- `skip`：跳过这阶段
+- `abort_task`：放弃整个任务
+- `manual_write`：你自己写这个文件
 
-详细委派模式见 `references/delegation-patterns.md`。
-
-## 工具速查
-
-| 工具 | 用途 |
-|------|------|
-| pi_plan | 决策：该不该委派、sync/async、开几个 session |
-| pi_delegate | 派任务（默认 async） |
-| pi_status | 收割 run 结果（long-poll） |
-| pi_session_list | 列 session（不传 cwd 取全量） |
-| pi_session_snapshot | 看 session 详情 |
-| pi_session_fork | 从已有 session 派生（试另一条路） |
-| pi_kill | 中止 run |
+详细模式与示例见 `references/delegation-patterns.md`。
