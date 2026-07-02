@@ -155,6 +155,16 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
         status = "timeout";
         error = { code: ERROR_CODES.TIMEOUT, message: "run timed out", signal: res.signal };
       }
+    } else if (stalledKills.has(run.runId)) {
+      // 批次1: 停滞被 kill（进程可能自己非零退出而非 SIGTERM，故独立判断）
+      stalledKills.delete(run.runId);
+      status = "error";
+      error = { code: ERROR_CODES.STALLED, message: "run stalled (no progress)" };
+    } else if (manualKills.has(run.runId)) {
+      // 同理：主动 kill 但进程自己退出
+      manualKills.delete(run.runId);
+      status = "killed";
+      error = { code: ERROR_CODES.KILLED, message: "killed" };
     } else if (res.exitCode !== 0) {
       status = "error";
       error = { code: ERROR_CODES.NONZERO_EXIT, message: `exit ${res.exitCode}`, stderrTail: res.stderrTail, exitCode: res.exitCode ?? undefined };
