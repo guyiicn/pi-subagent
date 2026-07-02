@@ -19,6 +19,14 @@ if [[ "$MODE" == "hang" ]]; then
   exit 0
 fi
 
+if [[ "$MODE" == "stall" ]]; then
+  # 吐 session + 一个 progress，然后长时间不再吐（模拟软卡死）
+  emit "{\"type\":\"session\",\"version\":3,\"id\":\"$UUID\",\"cwd\":\"$(pwd)\"}"
+  emit "{\"type\":\"tool_execution_end\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"one_progress\"}]}}"
+  sleep 600  # 不再吐任何事件
+  exit 0
+fi
+
 # success / error_exit 都先吐 session
 emit "{\"type\":\"session\",\"version\":3,\"id\":\"$UUID\",\"cwd\":\"$(pwd)\"}"
 emit "{\"type\":\"turn_start\",\"timestamp\":1}"

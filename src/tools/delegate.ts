@@ -14,6 +14,10 @@ const SESSION_START_TIMEOUT_MS = 10000;
 const manualKills = new Set<string>();
 export function markManualKill(runId: string): void { manualKills.add(runId); }
 
+// 批次1: 停滞 kill（区分主动 kill vs 停滞 kill）
+const stalledKills = new Set<string>();
+export function markStalledKill(runId: string): void { stalledKills.add(runId); }
+
 export interface DelegateInput {
   prompt: string;
   session: string;
@@ -22,6 +26,7 @@ export interface DelegateInput {
   constraints?: Constraints;
   mode?: "sync" | "async";
   runTimeoutMs?: number;
+  stallTimeoutMs?: number;   // 批次1: 无进展超时，默认 120000
   allowUnknownTools?: boolean;
 }
 
@@ -137,11 +142,15 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
       }
       // 不创建 SessionRecord
     } else if (res.signal === "SIGTERM" || res.signal === "SIGKILL") {
-      // 被 kill：区分超时（collectOutput 内部 runTimeoutMs 触发）vs 主动 kill（pi_kill）
+      // 被 kill：区分 主动 kill(pi_kill) / 停滞(stalled) / 整体超时(runTimeoutMs)
       if (manualKills.has(run.runId)) {
         manualKills.delete(run.runId);
         status = "killed";
         error = { code: ERROR_CODES.KILLED, message: "killed", signal: res.signal };
+      } else if (stalledKills.has(run.runId)) {
+        stalledKills.delete(run.runId);
+        status = "error";
+        error = { code: ERROR_CODES.STALLED, message: "run stalled (no progress)", signal: res.signal };
       } else {
         status = "timeout";
         error = { code: ERROR_CODES.TIMEOUT, message: "run timed out", signal: res.signal };
@@ -245,6 +254,22 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
       }
     }, SESSION_START_TIMEOUT_MS).unref?.();
   }
+
+  // 批次1: 停滞检测——周期检查 lastProgressAt，无进展超 stallTimeoutMs 则 kill+标 stalled
+  const stallTimeoutMs = input.stallTimeoutMs ?? 120000;
+  const stallChecker = setInterval(() => {
+    const r = deps.runs.get(run.runId);
+    if (!r || r.status !== "running") {
+      clearInterval(stallChecker);
+      return;
+    }
+    if (Date.now() - r.lastProgressAt > stallTimeoutMs) {
+      clearInterval(stallChecker);
+      markStalledKill(run.runId);
+      deps.procs.kill(run.runId);
+    }
+  }, Math.min(5000, stallTimeoutMs));
+  stallChecker.unref?.();
 
   // async 模式
   if (mode === "async") {

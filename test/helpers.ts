@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 const FAKE_PI = resolve(process.cwd(), "test/fixtures/fake-pi.sh");
 
 // 提供临时 cwd + 设 PI_BIN/FAKE_PI_MODE
-export function fakePiEnv(mode: "success" | "no_session" | "hang" | "error_exit" = "success") {
+export function fakePiEnv(mode: "success" | "no_session" | "hang" | "error_exit" | "stall" = "success") {
   return {
     PI_BIN: FAKE_PI,
     FAKE_PI_MODE: mode,
