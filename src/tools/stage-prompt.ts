@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import type { Stage, Task, StageAttempt } from "../types.js";
 
 // design-batch1.md §F.3 / §G：IOAC 执行 prompt + 升级指令
@@ -15,7 +15,8 @@ export function buildStagePrompt(
   attemptNo: number,
   prevFailure?: PrevFailure,
 ): string {
-  const abs = (p: string) => join(task.cwd, p);
+  // P2 问题1: 绝对路径直接用，相对路径才 join cwd（join 不会让绝对路径胜出）
+  const abs = (p: string) => (isAbsolute(p) ? p : join(task.cwd, p));
   const inputs = (stage.inputFiles ?? []).map(abs);   // 防御 undefined
   const output = abs(stage.outputFile ?? "output.txt");
 
@@ -80,7 +81,7 @@ export function buildUpgradeHint(
 
 // design-batch1.md §F.2：审阅 prompt
 export function buildReviewPrompt(task: Task): string {
-  const abs = (p: string) => join(task.cwd, p);
+  const abs = (p: string) => (isAbsolute(p) ? p : join(task.cwd, p));
   const reviewedPath = abs("_plan-reviewed.md");
   const draftPath = abs(task.planDraftPath);
   const refsPath = abs("_refs.md");

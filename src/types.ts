@@ -139,8 +139,11 @@ export const ERROR_CODES = {
 // ============================================================
 
 export interface ValidateRule {
-  kind: "file_exists" | "file_nonempty" | "contains" | "not_contains" | "regex";
+  kind: "file_exists" | "file_nonempty" | "contains" | "not_contains" | "regex" | "run_check";
   pattern?: string;            // contains/not_contains/regex 用
+  // run_check: 对文件跑语法检查。pattern 指定检查器:
+  //   "node" → node --check (JS/TS 语法)
+  //   "bash -n" → bash 语法检查
 }
 
 export interface StageAttempt {

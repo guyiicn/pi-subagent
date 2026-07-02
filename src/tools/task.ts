@@ -1,12 +1,12 @@
 import { existsSync, statSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { TaskRegistry } from "../registry/task.js";
 import type { SessionRegistry } from "../registry/session.js";
 import type { RunRegistry } from "../registry/run.js";
 import type { ProcessTable } from "../runner/process-table.js";
 import { delegate, type DelegateDeps } from "./delegate.js";
 import { status } from "./status.js";
-import { validateFile } from "../runner/validate.js";
+import { validateFile, validateFiles, splitOutputFiles } from "../runner/validate.js";
 import { buildStagePrompt, buildReviewPrompt } from "./stage-prompt.js";
 import { Errors } from "../errors.js";
 import type { Task, Stage, StageAttempt, StageCreateInput, ManualPanel, Constraints, Snapshot } from "../types.js";
@@ -26,7 +26,8 @@ export function taskCreate(
 ): { task: Task } {
   if (!input.taskId) throw Errors.invalidArg("taskId required");
   if (!existsSync(input.cwd) || !statSync(input.cwd).isDirectory()) throw Errors.cwdInvalid(input.cwd);
-  const draftAbs = join(input.cwd, input.planDraftPath);
+  // P2 问题1: planDraftPath 支持绝对路径（join('/cwd','/abs') 会错误拼成 /cwd/abs）
+  const draftAbs = isAbsolute(input.planDraftPath) ? input.planDraftPath : join(input.cwd, input.planDraftPath);
   if (!existsSync(draftAbs)) throw Errors.planDraftMissing(input.planDraftPath);
   if (input.stages.length === 0) throw Errors.invalidArg("stages must not be empty");
 
@@ -170,9 +171,8 @@ export async function taskStageRun(
     // 等完成
     const done = await deps.runs.waitForCompletion(r.runId, (input.runTimeoutMs ?? 600000) + 10000);
 
-    // 判定 + 验收
-    const outputAbs = join(task.cwd, stage.outputFile);
-    const verdict = judgeAttempt(done, outputAbs, stage);
+    // 判定 + 验收（多文件 outputFile 支持逗号分隔，P0 问题2）
+    const verdict = judgeAttempt(done, stage.outputFile ?? "", task.cwd, stage);
     const attempt: StageAttempt = {
       attemptNo,
       runId: r.runId,
@@ -217,10 +217,11 @@ export async function taskStageRun(
   return { stage: deps.tasks.getStage(input.taskId, input.stageId)!, outcome: "manual", attempts: stage.attempts, manualPanel: panel };
 }
 
-// 判定单次 attempt：综合 run 终态 + 文件验收
+// 判定单次 attempt：综合 run 终态 + 文件验收（支持多文件 outputFile）
 function judgeAttempt(
   done: { status?: string; error?: { code?: string }; result?: string } | undefined,
-  outputAbs: string,
+  outputSpec: string,
+  cwd: string,
   stage: Stage,
 ): { passed: boolean; failureType?: StageAttempt["failureType"]; detail: string } {
   // run 异常
@@ -237,11 +238,13 @@ function judgeAttempt(
       return { passed: false, failureType: "pi_refused", detail: result.slice(0, 200) };
     }
   }
-  // 文件验收
-  const v = validateFile(outputAbs, stage.validateRules);
+  // 文件验收（多文件：逗号/分号分隔，每个独立检查）
+  const v = validateFiles(outputSpec, cwd, stage.validateRules);
   if (v.passed) return { passed: true, detail: "ok" };
   // 文件问题归类
-  if (!existsSync(outputAbs)) return { passed: false, failureType: "no_output", detail: v.detail ?? "no file" };
+  const files = splitOutputFiles(outputSpec, cwd);
+  const anyExists = files.some((f) => existsSync(f));
+  if (!anyExists) return { passed: false, failureType: "no_output", detail: v.detail ?? "no file" };
   if (v.failedRule?.kind === "not_contains") {
     return { passed: false, failureType: "incomplete", detail: v.detail ?? "contains TODO" };
   }

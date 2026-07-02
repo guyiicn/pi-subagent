@@ -1,4 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import { execSync } from "node:child_process";
 import type { ValidateRule } from "../types.js";
 
 // 默认验收规则（design-batch1.md §C.2）
@@ -22,6 +24,28 @@ export function validateFile(filePath: string, rules?: ValidateRule[]): Validate
     if (!r.passed) return r;
   }
   return { passed: true };
+}
+
+// 多文件验收（P0 问题2）：outputFile 可能是逗号/分号分隔的多路径
+// 对每个文件独立用相同规则检查，任一失败即返回（含失败文件路径）
+export function validateFiles(outputSpec: string, cwd: string, rules?: ValidateRule[]): ValidateResult {
+  const files = splitOutputFiles(outputSpec, cwd);
+  for (const f of files) {
+    const r = validateFile(f, rules);
+    if (!r.passed) {
+      return { ...r, detail: `${f}: ${r.detail ?? "validation failed"}` };
+    }
+  }
+  return { passed: true };
+}
+
+// 拆分 outputFile 字符串为绝对路径数组（支持逗号/分号分隔，trim 空白）
+export function splitOutputFiles(outputSpec: string, cwd: string): string[] {
+  return outputSpec
+    .split(/[,;]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((p) => (isAbsolute(p) ? p : join(cwd, p)));
 }
 
 function checkOne(filePath: string, rule: ValidateRule): ValidateResult {
@@ -60,7 +84,31 @@ function checkOne(filePath: string, rule: ValidateRule): ValidateResult {
       } catch (e) {
         return { passed: false, failedRule: rule, detail: `invalid regex: ${(e as Error).message}` };
       }
+    case "run_check":
+      // 运行时语法检查（增强建议）。pattern 指定检查器命令前缀
+      return runCheck(filePath, rule.pattern ?? "node");
     default:
       return { passed: false, failedRule: rule, detail: `unknown rule kind` };
+  }
+}
+
+// 运行时语法检查（同步 execSync，超时 10s）
+function runCheck(filePath: string, checker: string): ValidateResult {
+  const rule: ValidateRule = { kind: "run_check", pattern: checker };
+  let cmd: string;
+  if (checker === "node") {
+    cmd = `node --check "${filePath}"`;
+  } else if (checker === "bash" || checker === "bash -n") {
+    cmd = `bash -n "${filePath}"`;
+  } else {
+    // 自定义：直接当 shell 命令，{} 替换为文件路径
+    cmd = checker.includes("{}") ? checker.replace(/\{\}/g, `"${filePath}"`) : `${checker} "${filePath}"`;
+  }
+  try {
+    execSync(cmd, { timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+    return { passed: true };
+  } catch (e: any) {
+    const stderr = (e.stderr ?? e.stdout ?? "").toString().slice(0, 200);
+    return { passed: false, failedRule: rule, detail: `${checker} failed: ${stderr || e.message}` };
   }
 }

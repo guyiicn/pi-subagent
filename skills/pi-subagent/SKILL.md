@@ -99,6 +99,16 @@ MCP host（ZCode）对单次工具调用有 30s 硬超时。`pi_status` 默认 `
 - **重派失败任务时用新 session 名**（如 `math-2`、`frontier-3`），避免历史 progress 混入。
 - `pi_status(runId)` 返回的是**单次 run 的 progress**（Run 级隔离），不受 session 历史影响——优先用 runId 收割。
 
+**并发上限（硬限制）：**
+- `pi_delegate` / `pi_task_stage_run` **全局并发上限 4** 个 running run。
+- 并行 stage 时：`parallelizable:true` 的 stage 可并发调多个 `pi_task_stage_run`，但总数 ≤ 4；第 5 个返回 `resource_busy`。
+- 超过 4 个时 host 应**排队**（等前一个 passed 再发下一个），不要无脑 Promise.all >4 个。
+
+**多文件 outputFile：**
+- stage 的 `outputFile` 支持**逗号/分号分隔多文件**：`"index.html, css/style.css, js/main.js"`。
+- 验收器对每个文件独立检查（全部存在+无 TODO 才算 passed）。
+- 也支持绝对路径：`"/abs/a.html, rel/b.css"`。
+
 **stall 与长内容生成：**
 - Pi 生成长内容（>5KB HTML）时，"构思全文"阶段无 tool 调用，可能被判 stalled。
 - 工具已在 stage prompt 强制"先骨架→逐节 edit"节奏（每步都调 tool 保持进度）。
