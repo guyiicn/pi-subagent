@@ -25,4 +25,10 @@ export const Errors = {
   resourceBusy: () => makeError(ERROR_CODES.RESOURCE_BUSY, "concurrency limit (4) reached"),
   forkTimeout: () => makeError(ERROR_CODES.FORK_TIMEOUT, "fork process timed out"),
   runExpired: (runId: string) => makeError(ERROR_CODES.RUN_EXPIRED, `run expired: ${runId}`),
+  // 批次1: task 编排
+  taskNotFound: (id: string) => makeError(ERROR_CODES.TASK_NOT_FOUND, `task not found: ${id}`),
+  stageNotFound: (taskId: string, stageId: string) => makeError(ERROR_CODES.STAGE_NOT_FOUND, `stage not found: ${stageId} in task ${taskId}`),
+  dependencyUnmet: (stageId: string, missing: string[]) => makeError(ERROR_CODES.DEPENDENCY_UNMET, `stage ${stageId} dependencies unmet: ${missing.join(", ")}`, { missing }),
+  taskConflict: (id: string) => makeError(ERROR_CODES.TASK_CONFLICT, `task already exists: ${id}`),
+  planDraftMissing: (path: string) => makeError(ERROR_CODES.PLAN_DRAFT_MISSING, `plan draft not found: ${path}`),
 };

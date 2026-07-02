@@ -38,6 +38,7 @@ export class RunRegistry {
       status: "running",
       progress: [],
       startedAt: input.startedAt,
+      lastProgressAt: input.startedAt,
     };
     this.runs.set(run.runId, run);
     return run;
@@ -83,6 +84,7 @@ export class RunRegistry {
     const r = this.runs.get(runId);
     if (!r) return;
     r.progress.push(ev);
+    r.lastProgressAt = Date.now();   // 批次1: 停滞检测用
     if (r.progress.length > 200) {
       r.progress = r.progress.slice(-200);
       r.progressTruncated = true;

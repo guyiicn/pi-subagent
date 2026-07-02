@@ -61,6 +61,7 @@ export interface Run {
   error?: RunError;
   startedAt: number;
   endedAt?: number;
+  lastProgressAt: number;   // 批次1: 收到最近一次 tool_execution_end 的时间；create 时 = startedAt
 }
 
 // ===== Snapshot (spec §4 _snapshot 脱敏视图) =====
@@ -122,4 +123,83 @@ export const ERROR_CODES = {
   SESSION_CREATE_FAILED: "session_create_failed",
   SESSION_START_TIMEOUT: "session_start_timeout",
   INTERRUPTED_BY_RESTART: "interrupted_by_restart",
+  // 批次1 新增
+  STALLED: "stalled",
+  TASK_NOT_FOUND: "task_not_found",
+  STAGE_NOT_FOUND: "stage_not_found",
+  DEPENDENCY_UNMET: "dependency_unmet",
+  TASK_CONFLICT: "task_conflict",
+  PLAN_DRAFT_MISSING: "plan_draft_missing",
 } as const;
+
+// ============================================================
+// 批次1: Task 编排（design-batch1.md §C）
+// ============================================================
+
+export interface ValidateRule {
+  kind: "file_exists" | "file_nonempty" | "contains" | "not_contains" | "regex";
+  pattern?: string;            // contains/not_contains/regex 用
+}
+
+export interface StageAttempt {
+  attemptNo: number;           // 1..3
+  runId: string;
+  status: "passed" | "failed";
+  failureType?: "no_output" | "incomplete" | "wrong_content" | "timeout" | "stalled" | "pi_refused";
+  failureDetail: string;
+  ts: number;
+}
+
+export interface Stage {
+  stageId: string;             // host 给，如 "1"/"2"/"3a"。Task 内唯一
+  title: string;
+  objective: string;           // 阶段目标（一句话）
+  inputFiles: string[];        // 读哪些（相对 cwd）
+  outputFile: string;          // 写哪个（相对 cwd）
+  dependsOn: string[];         // 依赖的 stageId
+  parallelizable: boolean;
+  promptHint?: string;         // host 给的额外提示（注入 IOAC Action 段）
+  validateRules?: ValidateRule[];  // 无则用默认
+  status: "pending" | "running" | "passed" | "failed" | "manual" | "skipped";
+  session?: string;            // 执行 session 名
+  attempts: StageAttempt[];
+  lastFailureReason?: string;
+}
+
+export interface Task {
+  taskId: string;
+  goal: string;
+  cwd: string;
+  status: "planning" | "executing" | "blocked_manual" | "completed" | "abandoned";
+  planDraftPath: string;       // 相对 cwd
+  planReviewedPath?: string;
+  planVerdict?: "approve" | "approve_with_changes" | "reject";
+  stages: Stage[];
+  reviewSession?: string;
+  reviewRunId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// Task 持久化文件
+export interface TaskRegistryFile {
+  version: 1;
+  tasks: Task[];
+}
+
+// pi_task_stage_run 返回的决策面板
+export interface ManualPanel {
+  taskId: string;
+  stageId: string;
+  attempts: StageAttempt[];
+  lastPiResult?: string;
+  availableFiles: string[];
+  options: ["retry_with_new_hint", "skip", "abort_task", "manual_write"];
+}
+
+// stage 执行时 host 给的创建参数（Pick 自 Stage）
+export type StageCreateInput = Pick<
+  Stage,
+  "stageId" | "title" | "objective" | "inputFiles" | "outputFile" | "dependsOn" | "parallelizable" | "promptHint" | "validateRules"
+>;
+
