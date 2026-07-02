@@ -2,11 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-// fake-pi.sh 的绝对路径
-const FAKE_PI = resolve(process.cwd(), "test/fixtures/fake-pi.sh");
+// fake-pi.sh 的绝对路径（用 bash 调用，绕开可执行权限依赖）
+const FAKE_PI = `bash ${resolve(process.cwd(), "test/fixtures/fake-pi.sh")}`;
 
 // 提供临时 cwd + 设 PI_BIN/FAKE_PI_MODE
-export function fakePiEnv(mode: "success" | "no_session" | "hang" | "error_exit" | "stall" = "success") {
+export function fakePiEnv(
+  mode: "success" | "no_session" | "hang" | "error_exit" | "stall" | "stage_success" | "stage_success_secondtry" = "success",
+) {
   return {
     PI_BIN: FAKE_PI,
     FAKE_PI_MODE: mode,

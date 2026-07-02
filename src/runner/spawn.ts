@@ -4,8 +4,11 @@ import type { Constraints } from "../types.js";
 
 const DEFAULT_PI_BIN = "pi";
 
-function piBin(): string {
-  return process.env.PI_BIN ?? DEFAULT_PI_BIN;
+// PI_BIN 可含参数（空格拆分），便于测试用 "bash /path/to/fake-pi.sh" 绕开可执行权限
+function piBinParts(): { cmd: string; extraArgs: string[] } {
+  const bin = process.env.PI_BIN ?? DEFAULT_PI_BIN;
+  const parts = bin.split(/\s+/).filter(Boolean);
+  return { cmd: parts[0], extraArgs: parts.slice(1) };
 }
 
 export interface SpawnedDelegate {
@@ -18,18 +21,20 @@ export function spawnDelegate(opts: {
   constraints: Constraints;
   cwd: string;
 }): SpawnedDelegate {
-  const args = buildDelegateArgs({
+  const { cmd, extraArgs } = piBinParts();
+  const args = [...extraArgs, ...buildDelegateArgs({
     prompt: opts.prompt,
     sessionId: opts.sessionId,
     constraints: opts.constraints,
-  });
-  const child = spawn(piBin(), args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
+  })];
+  const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
   return { child };
 }
 
 export function spawnFork(opts: { sourceSessionId: string; cwd: string }): ChildProcess {
-  const args = buildForkArgs(opts.sourceSessionId);
-  return spawn(piBin(), args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
+  const { cmd, extraArgs } = piBinParts();
+  const args = [...extraArgs, ...buildForkArgs(opts.sourceSessionId)];
+  return spawn(cmd, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 export interface CollectResult {
