@@ -11,11 +11,12 @@ metadata:
 
 把 Pi 当作**可委派的编程子代理**。核心思想：host 负责**拆分 + 不可控 I/O（联网）**，Pi 负责**可控的编码/写作**（禁联网、专注落盘）。
 
-## 三条铁律（必须遵守）
+## 四条铁律（必须遵守）
 
 1. **不可控 I/O 收回 host（C 模式）**：联网搜索、外部 API 调用由 host（你/ZCode）做，结果写进任务目录的 `_refs.md`。**绝不让 Pi 自己联网**——它会绕圈（实测：UltimateSearch skill 会诱导 Pi 反复搜索）。
 2. **大任务必须拆分（B 模式）**：不要一次性委派"生成整个课件"。用 `pi_task_create` 拆成阶段，每阶段产出独立文件，host 在阶段间验证。
 3. **Pi 执行阶段禁 skill**：`pi_task_plan` / `pi_task_stage_run` 默认 `noSkills:true`（防联网诱导）。保留 bash/read/edit/write 让 Pi 干活。
+4. **代码修改权单一归属 Pi（一刀切）**：任务 cwd 下的**代码文件**（.ts/.js/.html/.css/.py/.go 等任何 Pi 的产出），**只有 Pi 有权修改**。host 评审时**只能用只读工具**（read/grep/glob/pi_status/pi_session_*），发现任何问题——哪怕一个 typo、一个缺 import——都**禁止自己 edit/write/bash 改**，必须委派 Pi 修。详见下方「代码修改权」节。
 
 ## 标准任务流程（6 步）
 
@@ -86,6 +87,48 @@ metadata:
 - ❌ 委派后不读结果 —— 每阶段看 outcome，failed/manual 要处理。
 - ❌ stage 失败原样重跑 —— 工具已自动按 failureType 升级 prompt，但你要看 manual 面板决策。
 - ❌ 工具调用失败后机械重试 —— 工具返回错误时，必须先诊断"是否调错了工具 / 参数是否合理"，而不是原样或微调重试。特别警惕：① 生成错误工具名（如把 pi_task_create 串成 analyze_image 这类任务里根本不存在的工具）；② 用占位符（example.com / "test"）喂工具。任何工具连续失败 2 次即停止、回到上层重新规划，绝不在自然语言里"一边说要停一边继续重试"。
+- ❌ **host 自己改代码** —— 评审 Pi 产出后发现 bug / 缺功能 / typo，禁止用 edit/write/bash 直接改。host 在代码文件上**只能 read/grep**，任何修改（无大小）必须委派 Pi。违反此条 = 角色越界，会导致 host 与 Pi 对同一文件理解分叉、git 历史混淆、Pi 后续 delegate 覆盖 host 改动。
+- ❌ host 用 bash 间接改代码 —— `sed`/`echo >`/`cat >` 等通过 shell 改代码文件，和用 edit 改**性质完全相同**，同样禁止。
+
+## 代码修改权（一刀切，最高优先级）
+
+**任务 cwd 下的代码文件，只有 Pi（通过 pi_delegate / pi_task_stage_run）有权修改。**
+
+这是角色边界，不是效率取舍——即便 host 改一个 typo 只要 5 秒、委派 Pi 要 30 秒，也必须委派 Pi。原因：
+- **单一修改者**：git 历史清晰（改动都来自 Pi），评审/回滚不混淆。
+- **防分叉**：host 改了一处，Pi 下次 delegate 读到时不知道谁改的，可能覆盖或冲突。
+- **职责不混岗**：host 做"判断"（评审/规划），Pi 做"执行"（改代码），不混。
+
+### 文件归属判定
+
+| 文件类型 | 谁可改 | 例子 |
+|---------|--------|------|
+| **代码/产出文件** | **只有 Pi** | `.ts/.js/.html/.css/.py/.go/.rs/.java` 等任何 stage 的 outputFile 涉及的文件，以及 Pi 已产出的任何代码 |
+| **元数据文件（`_` 开头）** | host 和 Pi 都可改 | `_plan-draft.md` / `_refs.md` / `_plan-reviewed.md` / `_skeleton.md` |
+| **本项目自身代码**（pi-subagent 仓库） | 不在本规则范围 | 这是开发 pi-subagent 本身时的事，不影响任务编排 |
+
+### host 评审时的合法工具
+
+评审 Pi 的产出时，host **只能用只读工具**：
+- ✅ `read` / `grep` / `glob`（看代码）
+- ✅ `pi_status` / `pi_session_snapshot`（看 run/session 状态）
+- ✅ `pi_task_list`（看任务进度）
+- ❌ `edit` / `write`（改代码文件）
+- ❌ `bash`（跑 sed/echo > 等改代码）
+
+### 评审发现问题后必须这么做
+
+无论问题大小（typo / bug / 缺功能 / 重构建议）：
+1. 用只读工具定位问题（哪行、什么错、期望行为）
+2. **委派 Pi 修**——新 session 或 fork，prompt 写清：
+   ```
+   评审发现 <文件:行号> 问题：<具体描述>
+   期望行为：<xxx>
+   请修复，只改这个文件。
+   ```
+3. 等 Pi 修完，**再次评审**（仍只用只读工具）。
+
+**禁止**：评审完自己上手改、评审时顺手 edit、用 bash 改、补充 Pi 没写的功能。
 
 ## 重要行为说明（实测得出）
 
