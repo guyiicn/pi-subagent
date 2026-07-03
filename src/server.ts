@@ -278,6 +278,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 });
 
+// 兜底：任何未捕获异常/未处理拒绝都不应掀翻整个 server（否则 stdio 传输断开，
+// 客户端看到 "Connection closed"，所有工具一起失联）。记到 stderr（不污染 stdout 的
+// JSON-RPC 通道），保持进程存活。
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`[pi-subagent] uncaughtException: ${err?.stack ?? err}\n`);
+});
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(`[pi-subagent] unhandledRejection: ${String(reason)}\n`);
+});
+
 // 退出清理：kill 所有 managed child
 function cleanup() {
   procs.killAll();
