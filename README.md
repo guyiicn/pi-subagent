@@ -80,9 +80,15 @@ Three layers with clear boundaries: **Tool layer** (MCP schema + `plan()` pure f
 ```bash
 git clone <this-repo> && cd pi-subagent
 npm install
+npm run build      # required: emits dist/, the MCP entry point
 ```
 
 Prerequisite: the `pi` CLI is installed (`npm i -g @earendil-works/pi-coding-agent`) and on `PATH`.
+
+> **npm 10+ blocks install scripts by default.** If `npm install` prints
+> `1 package has install scripts not yet covered by allowScripts` for `esbuild`, run
+> `npm install-scripts approve esbuild` — `tsx` (used by the test suite) needs esbuild's
+> native binary and will fail to start without it.
 
 ## Configure an MCP host
 
@@ -92,12 +98,22 @@ Add to your MCP client config:
 {
   "mcpServers": {
     "pi-subagent": {
-      "command": "npx",
-      "args": ["tsx", "/abs/path/to/pi-subagent/src/server.ts"]
+      "command": "node",
+      "args": ["/abs/path/to/pi-subagent/dist/server.js"]
     }
   }
 }
 ```
+
+> **Use the compiled `dist/` entry with plain `node`, and always an absolute path.**
+> Do *not* configure `npx tsx src/server.ts`: MCP hosts spawn the server with the *host's*
+> working directory (the project being edited), not this repo. From there `npx` cannot resolve
+> the locally installed `tsx`, so it falls through to a registry download — on a slow or
+> firewalled network that blows past the host's 30s handshake window and the server shows up as
+> `CONNECT_TIMEOUT`. Running `dist/server.js` under `node` needs no resolution step and starts in
+> ~0.2s from any cwd.
+>
+> Re-run `npm run build` after pulling changes, since `dist/` is gitignored.
 
 Optional env vars:
 - `PI_SUBAGENT_REGISTRY` — registry path (default `~/.pi-subagent/registry.json`)
@@ -143,7 +159,7 @@ Key design decisions, all backed by real probing of `pi -p` output and external 
 
 ## Status
 
-Working implementation, 140 passing tests. Not yet published to npm — run from source via `tsx`.
+Working implementation, 140 passing tests. Not yet published to npm — clone, `npm install && npm run build`, then point your MCP host at `dist/server.js`.
 
 ## License
 
