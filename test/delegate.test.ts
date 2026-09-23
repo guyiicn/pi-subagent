@@ -166,3 +166,21 @@ test("同名新 session 并发 create（握手前）→ 第二个 session_busy",
   });
   c.cleanup();
 });
+
+test("运行中的流式 progress 已脱敏（不等 finalize）", async () => {
+  const c = tmpCwd();
+  await withEnv({ ...fakePiEnv("stall"), FAKE_TOOL_TEXT: "api_key=sk-abcdefghijklmnopqrstuvwxyz0123" }, async () => {
+    const d = deps();
+    const r = await delegate({ prompt: "do", session: "s1", cwd: c.dir, goal: "g", mode: "async" }, d);
+    const deadline = Date.now() + 5000;
+    while ((d.runs.get(r.runId)?.progress.length ?? 0) === 0 && Date.now() < deadline) {
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    const run = d.runs.get(r.runId)!;
+    assert.equal(run.status, "running");
+    assert.equal(run.progress.length, 1);
+    assert.ok(!run.progress[0].summary.includes("sk-abc"), run.progress[0].summary);
+    await drain(d);
+  });
+  c.cleanup();
+});

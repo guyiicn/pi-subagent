@@ -330,3 +330,26 @@ test("taskCreate 恢复：中断 stage 的 outputFile 存在但验收不过（�
   });
   c.cleanup();
 });
+
+test("Pi 正常退出但表示无法完成（无产出）→ failureType=pi_refused", async () => {
+  const c = setupTaskDir();
+  await withEnv({ ...fakePiEnv("success"), FAKE_RESULT_TEXT: "我无法完成这个任务，需要更多资料" }, async () => {
+    const { d } = deps();
+    await createTask(d, c.dir);
+    const r = await taskStageRun({ taskId: "t1", stageId: "1", maxAttempts: 1 }, d);
+    assert.equal(r.outcome, "manual");
+    assert.equal(r.attempts[0].failureType, "pi_refused");
+  });
+  c.cleanup();
+});
+
+test("结果含拒绝词但产出验收通过 → passed（不误判 pi_refused）", async () => {
+  const c = setupTaskDir();
+  await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/1.html`, FAKE_RESULT_TEXT: "已完成，cannot find optional file 已跳过" }, async () => {
+    const { d } = deps();
+    await createTask(d, c.dir);
+    const r = await taskStageRun({ taskId: "t1", stageId: "1", maxAttempts: 1 }, d);
+    assert.equal(r.outcome, "passed");
+  });
+  c.cleanup();
+});

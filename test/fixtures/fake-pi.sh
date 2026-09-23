@@ -22,7 +22,7 @@ fi
 if [[ "$MODE" == "stall" ]]; then
   # 吐 session + 一个 progress，然后长时间不再吐（模拟软卡死）
   emit "{\"type\":\"session\",\"version\":3,\"id\":\"$UUID\",\"cwd\":\"$(pwd)\"}"
-  emit "{\"type\":\"tool_execution_end\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"one_progress\"}]}}"
+  emit "{\"type\":\"tool_execution_end\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"${FAKE_TOOL_TEXT:-one_progress}\"}]}}"
   sleep 600  # 不再吐任何事件
   exit 0
 fi
@@ -31,7 +31,7 @@ fi
 emit "{\"type\":\"session\",\"version\":3,\"id\":\"$UUID\",\"cwd\":\"$(pwd)\"}"
 emit "{\"type\":\"turn_start\",\"timestamp\":1}"
 emit "{\"type\":\"tool_execution_end\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"FAKE_OUTPUT_$UUID\"}]}}"
-emit "{\"type\":\"agent_end\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"q\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"FAKE_RESULT_$MODE\"}],\"usage\":{\"input\":10,\"output\":5,\"totalTokens\":15,\"cost\":{\"total\":0.001}}}]}"
+emit "{\"type\":\"agent_end\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"q\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"${FAKE_RESULT_TEXT:-FAKE_RESULT_$MODE}\"}],\"usage\":{\"input\":10,\"output\":5,\"totalTokens\":15,\"cost\":{\"total\":0.001}}}]}"
 
 # stage_success: 写出 outputFile（env FAKE_OUTPUT_FILE 给路径）
 if [[ "$MODE" == "stage_success" ]]; then

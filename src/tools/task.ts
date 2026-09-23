@@ -426,16 +426,14 @@ async function judgeAttempt(
   if (done?.status === "error" && done.error?.code === "stalled") {
     return { passed: false, failureType: "stalled", detail: "run stalled, no progress" };
   }
-  if (done?.status === "error") {
-    // Pi 拒绝（result 里含拒绝词）
-    const result = done.result ?? "";
-    if (/我需要|无法完成|不能完成|需要更多|refuse|cannot/i.test(result)) {
-      return { passed: false, failureType: "pi_refused", detail: result.slice(0, 200) };
-    }
-  }
   // 文件验收（多文件：逗号/分号分隔，每个独立检查）
   const v = await validateFiles(outputSpec, cwd, stage.validateRules);
   if (v.passed) return { passed: true, detail: "ok" };
+  // Pi 拒绝：拒绝时 Pi 通常正常退出（completed），故不限 status，只要验收没过且结果含拒绝词
+  const result = done?.result ?? "";
+  if (/我需要|无法完成|不能完成|需要更多|refuse|cannot/i.test(result)) {
+    return { passed: false, failureType: "pi_refused", detail: result.slice(0, 200) };
+  }
   // 文件问题归类
   const files = splitOutputFiles(outputSpec, cwd);
   const anyExists = files.some((f) => existsSync(f));
