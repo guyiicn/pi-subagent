@@ -279,7 +279,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         result = kill(args, { runs, procs, sessions });
         break;
       case "pi_task_create":
-        result = taskCreate(args, { tasks, sessions, runs, procs, onTaskChange: persistTasks });
+        result = await taskCreate(args, { tasks, sessions, runs, procs, onTaskChange: persistTasks });
         break;
       case "pi_task_plan": {
         const r = await taskPlan(args, { tasks, sessions, runs, procs, onTaskChange: persistTasks });

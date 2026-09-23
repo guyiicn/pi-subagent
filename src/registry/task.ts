@@ -120,6 +120,14 @@ export class TaskRegistry {
   }
 
   // async 模式：记录/清除正在跑的 runId
+  setStageRunOptions(taskId: string, stageId: string, opts: Stage["runOptions"]): void {
+    const t = this.map.get(taskId);
+    const s = t?.stages.find((x) => x.stageId === stageId);
+    if (!t || !s) return;
+    s.runOptions = opts;
+    this.touch(taskId);
+  }
+
   setStageCurrentRunId(taskId: string, stageId: string, runId: string | undefined): void {
     const t = this.map.get(taskId);
     const s = t?.stages.find((x) => x.stageId === stageId);

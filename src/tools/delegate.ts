@@ -19,6 +19,10 @@ export function markManualKill(runId: string): void { manualKills.add(runId); }
 const stalledKills = new Set<string>();
 export function markStalledKill(runId: string): void { stalledKills.add(runId); }
 
+// 新建中的 session 名（已 spawn、尚未收到 session 事件建 SessionRecord）。
+// 防同名并发 create 在握手窗口内都通过 isCreate 校验
+const pendingCreates = new Set<string>();
+
 export interface DelegateInput {
   prompt: string;
   session: string;
@@ -27,7 +31,7 @@ export interface DelegateInput {
   constraints?: Constraints;
   mode?: "sync" | "async";
   runTimeoutMs?: number;
-  stallTimeoutMs?: number;   // 批次1: 无进展超时，默认 120000
+  stallTimeoutMs?: number;   // 批次1: 无进展超时，默认 300000
   allowUnknownTools?: boolean;
 }
 
@@ -64,6 +68,7 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
 
   const existing = deps.sessions.get(input.session);
   const isCreate = !existing;
+  if (isCreate && pendingCreates.has(input.session)) throw Errors.sessionBusy(input.session, "");
 
   // 校验
   if (isCreate) {
@@ -110,9 +115,19 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
   let exited = false;
   deps.procs.register(run.runId, child, () => { exited = true; });
 
+  // 续接：spawn 后同步置 running（与上方 sessionBusy 校验之间无 await，保证原子）。
+  // 新建 session 在握手时才建记录，由 pendingCreates 占位
+  if (isCreate) {
+    pendingCreates.add(input.session);
+  } else {
+    deps.sessions.setRunning(input.session, run.runId);
+    deps.sessions.incMsgCount(input.session, startedAt);
+  }
+
   // 收尾：解析结果 + 更新 registry
   const finalize = async (): Promise<{ status: string; result?: string; error?: any; usage?: any; progress?: ProgressEvent[]; progressTruncated?: boolean }> => {
     const res = await collectPromise;
+    if (isCreate) pendingCreates.delete(input.session);
     const { result, progress, usage } = extractResult(res.lines);
     const endedAt = Date.now();
 
@@ -222,6 +237,7 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
               constraints,
             });
             state.sessionRecordCreated = true;
+            pendingCreates.delete(input.session);
           }
           if (deps.sessions.has(input.session)) {
             deps.sessions.setRunning(input.session, run.runId);

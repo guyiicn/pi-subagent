@@ -131,3 +131,38 @@ test("async finalize 完成后触发 onSessionChange（持久化钩子）", asyn
   });
   c.cleanup();
 });
+
+test("续接 session 期间状态为 running，同 session 并发 delegate → session_busy", async () => {
+  const c = tmpCwd();
+  const d = deps();
+  await withEnv(fakePiEnv("success"), async () => {
+    await delegate({ prompt: "a", session: "s1", cwd: c.dir, goal: "g", mode: "sync" }, d);
+  });
+  await withEnv(fakePiEnv("hang"), async () => {
+    const r = await delegate({ prompt: "b", session: "s1", mode: "async" }, d);
+    assert.equal(d.sessions.get("s1")!.status, "running");
+    assert.equal(d.sessions.get("s1")!.runId, r.runId);
+    await assert.rejects(
+      () => delegate({ prompt: "c", session: "s1", mode: "async" }, d),
+      (e: any) => e.code === "session_busy",
+    );
+    await drain(d);
+  });
+  c.cleanup();
+});
+
+test("同名新 session 并发 create（握手前）→ 第二个 session_busy", async () => {
+  const c = tmpCwd();
+  await withEnv(fakePiEnv("success"), async () => {
+    const d = deps();
+    const [a, b] = await Promise.allSettled([
+      delegate({ prompt: "a", session: "dup", cwd: c.dir, goal: "g", mode: "async" }, d),
+      delegate({ prompt: "b", session: "dup", cwd: c.dir, goal: "g", mode: "async" }, d),
+    ]);
+    assert.equal(a.status, "fulfilled");
+    assert.equal(b.status, "rejected");
+    assert.equal((b as PromiseRejectedResult).reason.code, "session_busy");
+    await drain(d);
+  });
+  c.cleanup();
+});

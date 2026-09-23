@@ -20,10 +20,10 @@ export interface TaskDeps {
 }
 
 // ============ pi_task_create ============
-export function taskCreate(
+export async function taskCreate(
   input: { taskId: string; goal: string; cwd: string; planDraftPath: string; stages: StageCreateInput[] },
   deps: TaskDeps,
-): { task: Task } {
+): Promise<{ task: Task }> {
   if (!input.taskId) throw Errors.invalidArg("taskId required");
   if (!existsSync(input.cwd) || !statSync(input.cwd).isDirectory()) throw Errors.cwdInvalid(input.cwd);
   // P2 问题1: planDraftPath 支持绝对路径（join('/cwd','/abs') 会错误拼成 /cwd/abs）
@@ -44,8 +44,9 @@ export function taskCreate(
       const interrupted = old.attempts.some((a) => a.failureType === "interrupted_by_restart");
       if (!interrupted && old.status !== "failed") continue;
       if (!newStage.outputFile) continue;
-      const outAbs = isAbsolute(newStage.outputFile) ? newStage.outputFile : join(input.cwd, newStage.outputFile);
-      if (existsSync(outAbs) && statSync(outAbs).isFile()) {
+      // 按 stage 验收规则真正验收（支持多文件 outputFile），不只看文件存在
+      const v = await validateFiles(newStage.outputFile, input.cwd, newStage.validateRules ?? old.validateRules);
+      if (v.passed) {
         deps.tasks.setStageStatus(input.taskId, newStage.stageId, "passed");
         deps.tasks.setStageSession(input.taskId, newStage.stageId, old.session);
       }
@@ -182,9 +183,18 @@ export async function taskStageRun(
     if (stage.currentRunId && deps.runs.get(stage.currentRunId)?.status === "running") {
       return { stage, outcome: "running", runId: stage.currentRunId, attempts: stage.attempts };
     }
-    const attemptNo = (stage.attempts.at(-1)?.attemptNo ?? 0) + 1;
+    const baseAttemptNo = stage.attempts.at(-1)?.attemptNo ?? 0;
+    const attemptNo = baseAttemptNo + 1;
     const sessionName = `${input.taskId}-${input.stageId}-a${attemptNo}`;
     deps.tasks.setStageStatus(input.taskId, input.stageId, "running", sessionName);
+    // 保存发起参数，stage_collect 自动重派时沿用；attemptLimit 与 sync 一致按"本轮"计数
+    deps.tasks.setStageRunOptions(input.taskId, input.stageId, {
+      constraints,
+      stallTimeoutMs: input.stallTimeoutMs,
+      runTimeoutMs: input.runTimeoutMs,
+      promptHintOverride: hintOverride,
+      attemptLimit: baseAttemptNo + maxAttempts,
+    });
     const r = await delegate(
       {
         prompt: buildStagePrompt(stage, task, attemptNo, lastFailureOf(stage), hintOverride),
@@ -241,9 +251,8 @@ export async function taskStageCollect(
     return { stage, outcome: "running", attempts: stage.attempts };
   }
 
-  // run 已完成 → 判定 + 可能需要重试
-  const maxAttempts = 3;
-  const constraints = { noSkills: true, noContextFiles: true };
+  // run 已完成 → 判定 + 可能需要重试（沿用 stage_run 发起时的参数；旧数据无 runOptions 则用默认）
+  const opts = stage.runOptions ?? { constraints: { noSkills: true, noContextFiles: true }, attemptLimit: 3 };
   const verdict = await judgeAttempt(run, stage.outputFile ?? "", task.cwd, stage);
   const attempt: StageAttempt = {
     attemptNo: (stage.attempts.at(-1)?.attemptNo ?? 0) + 1,
@@ -265,17 +274,23 @@ export async function taskStageCollect(
 
   // 失败：继续发下一次（新 session 名防历史混入）
   const attemptNo = attempt.attemptNo + 1;
-  if (attemptNo <= maxAttempts) {
+  if (attemptNo <= opts.attemptLimit) {
     deps.tasks.setStageCurrentRunId(input.taskId, input.stageId, undefined);
     deps.tasks.setStageStatus(input.taskId, input.stageId, "running", `${input.taskId}-${input.stageId}-a${attemptNo}`);
     const r = await delegate(
       {
-        prompt: buildStagePrompt(stage, task, attemptNo, { failureType: attempt.failureType!, failureDetail: attempt.failureDetail }),
+        prompt: buildStagePrompt(
+          stage, task, attemptNo,
+          { failureType: attempt.failureType!, failureDetail: attempt.failureDetail },
+          opts.promptHintOverride,
+        ),
         session: `${input.taskId}-${input.stageId}-a${attemptNo}`,
         cwd: task.cwd,
         goal: `${task.taskId} / ${input.stageId}: ${stage.objective}`,
         mode: "async",
-        constraints,
+        constraints: opts.constraints,
+        stallTimeoutMs: opts.stallTimeoutMs,
+        runTimeoutMs: opts.runTimeoutMs,
       },
       deps as DelegateDeps,
     );
