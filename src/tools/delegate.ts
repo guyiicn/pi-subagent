@@ -4,6 +4,7 @@ import { RunRegistry } from "../registry/run.js";
 import { ProcessTable } from "../runner/process-table.js";
 import { spawnDelegate, collectOutput } from "../runner/spawn.js";
 import { extractResult } from "../runner/parse.js";
+import { redact } from "../registry/redact.js";
 import { Errors } from "../errors.js";
 import { ERROR_CODES, PI_BUILTIN_TOOLS, type Constraints, type Snapshot, type ProgressEvent } from "../types.js";
 
@@ -258,9 +259,10 @@ export async function delegate(input: DelegateInput, deps: DelegateDeps): Promis
           const txt = obj.result?.content
             ?.filter((c: any) => c.type === "text")
             .map((c: any) => c.text)
-            .join("");
+            .join("\n");
           if (txt) {
-            const ev: ProgressEvent = { ts: Date.now(), tool: obj.toolName, summary: txt.slice(0, 200) };
+            // 与 finalize（parse.extractResult）一致：先脱敏再截断，运行中 pi_status 也不泄露明文
+            const ev: ProgressEvent = { ts: Date.now(), tool: obj.toolName, summary: redact(txt) };
             deps.runs.appendProgress(run.runId, ev);
           }
         } catch {

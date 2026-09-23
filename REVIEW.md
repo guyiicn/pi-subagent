@@ -1,75 +1,24 @@
 # Project Review
 
-Date: 2026-07-01
+All findings below are resolved. Kept as a record of what was found and where it was fixed.
 
-## Findings
+## Review 2 — 2026-09-23
 
-### High: `npm run build` fails
+| Severity | Finding | Fix |
+|---|---|---|
+| High | Continuing an existing session never marked it `running`, so `session_busy` never fired and the same session could run two delegates concurrently. Two concurrent creates of the same new session name could also both pass before the handshake. | #3 — `setRunning` synchronously after spawn; `pendingCreates` guards the create handshake window |
+| Medium | `pi_task_stage_collect` hardcoded `maxAttempts=3` and default constraints, dropping the caller's constraints / timeouts / `promptHintOverride` on auto-retry, and counted attempts absolutely, so an async retry after `manual` went straight back to `manual`. | #3 — `Stage.runOptions` (persisted) carries the launch options and a per-round `attemptLimit` |
+| Medium | `pi_task_create` restart recovery marked interrupted stages `passed` when the output file merely existed, without running validation. | #3 — recovery runs `validateFiles` with the stage's `validateRules` |
+| Low | `pi_refused` was only detected when the run ended in `error`, but Pi normally exits cleanly when it declines, so refusals were classified as `no_output`. | #4 — refusal check now applies whenever validation fails, regardless of run status |
+| Low | Streaming progress visible via `pi_status` while a run was active was truncated but not redacted (only the final progress list was). | #4 — streaming progress goes through `redact()` as well |
 
-`npm run build` currently fails, so the package cannot produce `dist/server.js` even though `package.json` points `bin.pi-subagent` at that output and `README.md` documents build as available.
+Verification: `npm run build` passes; `npm test` 147/147 pass. Each fix has a regression test confirmed to fail on the pre-fix code.
 
-Error:
+## Review 1 — 2026-07-01
 
-```text
-src/tools/delegate.ts(165,11): error TS2345: Argument of type '{ code: any; message: any; runId: string; } | undefined' is not assignable to parameter of type '{ code: string; message: string; runId?: string | undefined; ts: number; } | undefined'.
-  Property 'ts' is missing in type '{ code: any; message: any; runId: string; }' but required in type '{ code: string; message: string; runId?: string | undefined; ts: number; }'.
-```
-
-Location: `src/tools/delegate.ts:163`
-
-The test suite runs through `tsx` and does not typecheck, so this is not caught by `npm test`.
-
-### High: missing Pi executable can hang `pi_delegate`
-
-If `PI_BIN` is wrong, `pi` is not installed, or the executable is not runnable, `spawn()` can emit `error` and `close` without emitting `exit`. `collectOutput()` only listens for `exit`, so it may never resolve.
-
-Locations:
-
-- `src/runner/spawn.ts:88`
-- `src/tools/delegate.ts:240`
-
-This can leave a new-session async `pi_delegate` call waiting forever during startup/handshake, which is a bad failure mode for MCP hosts.
-
-### Medium: async completion does not persist session terminal state
-
-Async `finalize()` updates run and session state in memory, but persistence is only triggered when the MCP request handler returns. If an async run completes and the host does not call `pi_status` or another tool afterward, the registry file can remain stale.
-
-Locations:
-
-- `src/tools/delegate.ts:147`
-- `src/tools/delegate.ts:158`
-- `src/server.ts:155`
-
-Impact: after restart, a completed async session may still be loaded from disk as `running` and then marked `interrupted_by_restart`, even though the run actually completed.
-
-### Low: README links to missing design docs
-
-`README.md` references:
-
-- `docs/superpowers/specs/2026-07-01-pi-subagent-design.md`
-- `docs/superpowers/plans/2026-07-01-pi-subagent.md`
-
-Those files are not present in the repository.
-
-Location: `README.md:70`
-
-## Verification
-
-```bash
-npm test
-```
-
-Result: passed. 14 test files passed.
-
-```bash
-npm run build
-```
-
-Result: failed with `TS2345` because `lastError` is missing `ts`.
-
-## Suggested Fix Order
-
-1. Fix the TypeScript build failure in `delegate.ts`.
-2. Make `collectOutput()` settle on `error`/`close`, not only `exit`, and add a regression test for bad `PI_BIN`.
-3. Add a persistence callback for async `finalize()` so session terminal state is saved when background runs complete.
-4. Either add the referenced design docs or remove/update the README links.
+| Severity | Finding | Fix |
+|---|---|---|
+| High | `npm run build` failed (`TS2345`, `lastError` missing `ts` in `delegate.ts`); tests run via `tsx` so did not catch it. | 5656852 |
+| High | A missing/non-executable `PI_BIN` could hang `pi_delegate`: `collectOutput()` only listened for `exit`, which `spawn` may never emit on failure. | 5656852 — settles on `error` / `close` too |
+| Medium | Async `finalize()` updated session state in memory only; persistence ran on the next MCP request, so a restart could load a completed session as `running`. | 5656852 — `onSessionChange` persistence hook |
+| Low | README linked to non-existent `docs/superpowers/...` design docs. | README now links `docs/design.md` and `docs/implementation-plan.md` |
