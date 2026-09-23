@@ -89,6 +89,7 @@ function fixStage(s: any): Stage | null {
     status: ["pending", "running", "passed", "failed", "manual", "skipped"].includes(s.status) ? s.status : "pending",
     session: s.session,
     currentRunId: typeof s.currentRunId === "string" ? s.currentRunId : undefined,
+    runOptions: s.runOptions && typeof s.runOptions === "object" ? s.runOptions : undefined,
     attempts: Array.isArray(s.attempts) ? s.attempts : [],
     lastFailureReason: s.lastFailureReason,
   };

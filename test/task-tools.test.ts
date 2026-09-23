@@ -51,7 +51,7 @@ test("taskCreate 建任务 + stages 初始化 pending", async () => {
   const c = setupTaskDir();
   await withEnv(fakePiEnv("success"), async () => {
     const { d } = deps();
-    const { task } = createTask(d, c.dir);
+    const { task } = await createTask(d, c.dir);
     assert.equal(task.status, "planning");
     assert.equal(task.stages[0].status, "pending");
   });
@@ -62,7 +62,7 @@ test("taskCreate planDraft 不存在 → plan_draft_missing", async () => {
   const c = tmpCwd();
   await withEnv(fakePiEnv("success"), async () => {
     const { d } = deps();
-    assert.throws(
+    await assert.rejects(
       () => taskCreate({ taskId: "t1", goal: "g", cwd: c.dir, planDraftPath: "_plan-draft.md", stages: [] }, d),
       (e: any) => e.code === "plan_draft_missing",
     );
@@ -74,9 +74,9 @@ test("taskCreate taskId 重复（无产出）→ 恢复合并不冲突，状态�
   const c = setupTaskDir();
   await withEnv(fakePiEnv("success"), async () => {
     const { d } = deps();
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     // 再次 create 同 taskId：不抛 conflict，返回既有 task（恢复语义）
-    const { task } = createTask(d, c.dir);
+    const { task } = await createTask(d, c.dir);
     assert.equal(task.status, "planning");
     assert.equal(task.stages.length, 1);
   });
@@ -90,14 +90,14 @@ test("taskCreate 恢复：中断 stage 的 outputFile 已存在 → 自动标 pa
   await withEnv(fakePiEnv("success"), async () => {
     const { d, tasks } = deps();
     // 先正常建任务，再模拟重启后的状态：stage 标 failed + interrupted attempt
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     tasks.setStageStatus("t1", "1", "failed", "t1-1-a1");
     tasks.addAttempt("t1", "1", {
       attemptNo: 1, runId: "r0", status: "failed",
       failureType: "interrupted_by_restart", failureDetail: "server 重启时仍在运行", ts: Date.now(),
     });
     // 再次 create 同 taskId → 恢复：outputFile 存在 → stage 标 passed
-    const { task } = createTask(d, c.dir);
+    const { task } = await createTask(d, c.dir);
     assert.equal(task.stages[0].status, "passed");
     assert.equal(task.status, "completed");  // 全部 passed → completed
   });
@@ -108,7 +108,7 @@ test("taskList 按 taskId / status 过滤", async () => {
   const c = setupTaskDir();
   await withEnv(fakePiEnv("success"), async () => {
     const { d, tasks } = deps();
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     assert.equal(taskList({ tasks }, { taskId: "t1" }).tasks.length, 1);
     assert.equal(taskList({ tasks }, { taskId: "nope" }).tasks.length, 0);
     assert.equal(taskList({ tasks }, { status: "planning" }).tasks.length, 1);
@@ -122,7 +122,7 @@ test("stage_run 成功：stage_success 模式写出文件 → passed", async () 
   const c = setupTaskDir();
   await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/1.html` }, async () => {
     const { d } = deps();
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     const res = await taskStageRun({ taskId: "t1", stageId: "1" }, d);
     assert.equal(res.outcome, "passed");
     assert.equal(res.stage.status, "passed");
@@ -136,7 +136,7 @@ test("stage_run 重派：第二次成功（marker 机制）→ passed，2 attemp
   const c = setupTaskDir();
   await withEnv({ ...fakePiEnv("stage_success_secondtry"), FAKE_OUTPUT_FILE: `${c.dir}/1.html` }, async () => {
     const dd = deps();
-    createTask(dd.d, c.dir);
+    await createTask(dd.d, c.dir);
     const res = await taskStageRun({ taskId: "t1", stageId: "1" }, dd.d);
     assert.equal(res.outcome, "passed");
     assert.equal(res.attempts.length, 2, "应有 2 次 attempt");
@@ -152,7 +152,7 @@ test("stage_run manual：连续 3 次 no_output → manual + 决策面板", asyn
   // success 模式不写文件 → 每次 no_output
   await withEnv(fakePiEnv("success"), async () => {
     const { d } = deps();
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     const res = await taskStageRun({ taskId: "t1", stageId: "1", maxAttempts: 3 }, d);
     assert.equal(res.outcome, "manual");
     assert.equal(res.stage.status, "manual");
@@ -169,7 +169,7 @@ test("stage_run 依赖未满足 → dependency_unmet", async () => {
   const c = setupTaskDir();
   await withEnv(fakePiEnv("success"), async () => {
     const { d } = deps();
-    taskCreate({
+    await taskCreate({
       taskId: "t1", goal: "g", cwd: c.dir, planDraftPath: "_plan-draft.md",
       stages: [
         { stageId: "1", title: "a", objective: "o", inputFiles: [], outputFile: "1.html", dependsOn: [], parallelizable: true },
@@ -190,7 +190,7 @@ test("taskPlan 派审阅 delegate → 返回 runId", async () => {
   const c = setupTaskDir();
   await withEnv(fakePiEnv("stage_success"), async () => {
     const { d } = deps();
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     const res = await taskPlan({ taskId: "t1" }, d);
     assert.ok(res.runId);
     assert.equal(d.tasks.get("t1")!.reviewSession, "t1-review");
@@ -201,10 +201,10 @@ test("taskPlan 派审阅 delegate → 返回 runId", async () => {
 });
 
 // ===== applyReviewResult（审阅闭环）=====
-test("applyReviewResult 从 _plan-reviewed.md 解析 verdict 并更新 task", () => {
+test("applyReviewResult 从 _plan-reviewed.md 解析 verdict 并更新 task", async () => {
   const c = setupTaskDir();
   const { d, tasks } = deps();
-  createTask(d, c.dir);
+  await createTask(d, c.dir);
   // 模拟 Pi 产出审阅文件
   writeFileSync(`${c.dir}/_plan-reviewed.md`, "verdict: reject\n\n原因：阶段划分不清晰\n");
   const res = applyReviewResult("t1", "run-abc", d);
@@ -216,10 +216,10 @@ test("applyReviewResult 从 _plan-reviewed.md 解析 verdict 并更新 task", ()
   c.cleanup();
 });
 
-test("applyReviewResult 文件缺失 → 默认 approve_with_changes", () => {
+test("applyReviewResult 文件缺失 → 默认 approve_with_changes", async () => {
   const c = setupTaskDir();
   const { d, tasks } = deps();
-  createTask(d, c.dir);
+  await createTask(d, c.dir);
   const res = applyReviewResult("t1", "run-xyz", d);
   assert.equal(res.verdict, "approve_with_changes");
   assert.equal(tasks.get("t1")!.planVerdict, "approve_with_changes");
@@ -231,7 +231,7 @@ test("stage_run async：立即返回 runId → stage_collect 收割后 passed", 
   const c = setupTaskDir();
   await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/1.html` }, async () => {
     const { d } = deps();
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     const start = await taskStageRun({ taskId: "t1", stageId: "1", mode: "async" }, d);
     assert.equal(start.outcome, "running");
     assert.ok(start.runId, "async 应返回 runId");
@@ -248,7 +248,7 @@ test("stage_collect：async 收割失败后自动重派（新 session），最�
   const c = setupTaskDir();
   await withEnv({ ...fakePiEnv("stage_success_secondtry"), FAKE_OUTPUT_FILE: `${c.dir}/1.html` }, async () => {
     const { d } = deps();
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     const start = await taskStageRun({ taskId: "t1", stageId: "1", mode: "async" }, d);
     assert.equal(start.outcome, "running");
     // 第一次收割：fake 第一次不写文件 → 判定 failed → 自动重派（返回新 runId）
@@ -270,7 +270,7 @@ test("stage_run manual 状态 + promptHintOverride 重试可再次执行", async
   // 第一阶段：success 模式不写文件 → 3 次失败 → manual
   await withEnv(fakePiEnv("success"), async () => {
     const { d } = deps();
-    createTask(d, c.dir);
+    await createTask(d, c.dir);
     const m = await taskStageRun({ taskId: "t1", stageId: "1", maxAttempts: 3 }, d);
     assert.equal(m.outcome, "manual");
     assert.ok(m.manualPanel?.options.includes("retry_with_new_hint"));
@@ -280,6 +280,53 @@ test("stage_run manual 状态 + promptHintOverride 重试可再次执行", async
       assert.equal(retry.outcome, "passed");
       assert.ok(retry.attempts.at(-1)?.status === "passed");
     });
+  });
+  c.cleanup();
+});
+
+test("manual 后 async 重试：stage_collect 按本轮 maxAttempts 继续重派，不直接回 manual", async () => {
+  const c = setupTaskDir();
+  await withEnv(fakePiEnv("success"), async () => {
+    const { d } = deps();
+    await createTask(d, c.dir);
+    const m = await taskStageRun({ taskId: "t1", stageId: "1", maxAttempts: 3 }, d);
+    assert.equal(m.outcome, "manual");
+    await withEnv({ ...fakePiEnv("stage_success_secondtry"), FAKE_OUTPUT_FILE: `${c.dir}/1.html` }, async () => {
+      const start = await taskStageRun(
+        { taskId: "t1", stageId: "1", mode: "async", maxAttempts: 2, promptHintOverride: "先写骨架", stallTimeoutMs: 60000 },
+        d,
+      );
+      assert.equal(start.outcome, "running");
+      const opts = d.tasks.getStage("t1", "1")!.runOptions!;
+      assert.equal(opts.attemptLimit, 5);
+      assert.equal(opts.promptHintOverride, "先写骨架");
+      assert.equal(opts.stallTimeoutMs, 60000);
+      // 第 4 次失败 → 应重派第 5 次（旧逻辑按绝对次数 >3 直接 manual）
+      const r1 = await taskStageCollect({ taskId: "t1", stageId: "1", waitTimeoutMs: 5000 }, d);
+      assert.equal(r1.outcome, "running");
+      const r2 = await taskStageCollect({ taskId: "t1", stageId: "1", waitTimeoutMs: 5000 }, d);
+      assert.equal(r2.outcome, "passed");
+      assert.equal(r2.attempts.at(-1)!.attemptNo, 5);
+    });
+    await drain(d);
+  });
+  c.cleanup();
+});
+
+test("taskCreate 恢复：中断 stage 的 outputFile 存在但验收不过（含 TODO）→ 不标 passed", async () => {
+  const c = setupTaskDir();
+  writeFileSync(`${c.dir}/1.html`, "<h1>TODO</h1>");
+  await withEnv(fakePiEnv("success"), async () => {
+    const { d, tasks } = deps();
+    await createTask(d, c.dir);
+    tasks.setStageStatus("t1", "1", "failed", "t1-1-a1");
+    tasks.addAttempt("t1", "1", {
+      attemptNo: 1, runId: "r0", status: "failed",
+      failureType: "interrupted_by_restart", failureDetail: "server 重启时仍在运行", ts: Date.now(),
+    });
+    const { task } = await createTask(d, c.dir);
+    assert.equal(task.stages[0].status, "failed");
+    assert.notEqual(task.status, "completed");
   });
   c.cleanup();
 });

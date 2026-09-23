@@ -168,6 +168,7 @@ export interface Stage {
   status: "pending" | "running" | "passed" | "failed" | "manual" | "skipped";
   session?: string;            // 执行 session 名
   currentRunId?: string;       // async 模式：正在跑的 runId（stage_collect 收割用），判定后清除
+  runOptions?: StageRunOptions; // async 模式：stage_run 发起时的参数，stage_collect 自动重派沿用
   attempts: StageAttempt[];
   lastFailureReason?: string;
 }
@@ -218,6 +219,15 @@ export interface StageCreateInput {
 }
 
 // stage_run 输入：host 可覆盖 hint 重试（manual 面板 retry_with_new_hint 落地）
+// async stage_run 的发起参数（stage_collect 重派时沿用，否则会丢用户设置）
+export interface StageRunOptions {
+  constraints: Constraints;
+  stallTimeoutMs?: number;
+  runTimeoutMs?: number;
+  promptHintOverride?: string;
+  attemptLimit: number;           // 本轮允许的最大 attemptNo（绝对值 = 发起时已有 attempts + maxAttempts）
+}
+
 export interface StageRunInput {
   taskId: string;
   stageId: string;

@@ -33,7 +33,7 @@ test("完整流程：2 阶段都成功 → task completed", async () => {
   writeFileSync(`${c.dir}/_plan-draft.md`, "# plan\n");
   await withEnv(fakePiEnv("stage_success"), async () => {
     const { tasks, d } = deps();
-    taskCreate({
+    await taskCreate({
       taskId: "multi", goal: "多阶段", cwd: c.dir, planDraftPath: "_plan-draft.md",
       stages: [
         { stageId: "1", title: "a", objective: "o1", inputFiles: ["_plan-draft.md"], outputFile: "1.html", dependsOn: [], parallelizable: true },
@@ -89,7 +89,7 @@ test("manual 状态：task blocked_manual，新 stage 仍受依赖检查", async
   writeFileSync(`${c.dir}/_plan-draft.md`, "# plan\n");
   await withEnv(fakePiEnv("success"), async () => {
     const { d } = deps();
-    taskCreate({
+    await taskCreate({
       taskId: "t1", goal: "g", cwd: c.dir, planDraftPath: "_plan-draft.md",
       stages: [
         { stageId: "1", title: "a", objective: "o", inputFiles: [], outputFile: "1.html", dependsOn: [], parallelizable: true },
