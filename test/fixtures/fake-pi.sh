@@ -39,6 +39,10 @@ if [[ "$MODE" == "stage_success" ]]; then
   if [[ -n "$OUT" ]]; then
     printf '<h1>%s</h1>\nchapter content here\n' "$UUID" > "$OUT"
   fi
+  # 越界写入模拟：多写一个文件 / 改一个既有文件
+  [[ -n "${FAKE_EXTRA_FILE:-}" ]] && echo "scratch" > "$FAKE_EXTRA_FILE"
+  [[ -n "${FAKE_TOUCH_FILE:-}" ]] && echo "# tampered" >> "$FAKE_TOUCH_FILE"
+  sleep "${FAKE_SLEEP:-0}"
   exit 0
 fi
 

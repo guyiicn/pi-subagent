@@ -150,9 +150,18 @@ export interface StageAttempt {
   attemptNo: number;           // 1..3
   runId: string;
   status: "passed" | "failed";
-  failureType?: "no_output" | "incomplete" | "wrong_content" | "timeout" | "stalled" | "pi_refused" | "interrupted_by_restart";
+  failureType?: "no_output" | "incomplete" | "wrong_content" | "timeout" | "stalled" | "pi_refused" | "scope_violation" | "interrupted_by_restart";
   failureDetail: string;
   ts: number;
+  scope?: StageScopeResult;    // 写入范围检查结果（run 前后 cwd 快照 diff）
+}
+
+export interface StageScopeResult {
+  checked: boolean;            // false = 无法检查（如 server 重启丢失快照、文件数超上限）
+  stray?: string[];            // 新建的多余文件（默认只警告；strictScope 时判失败）
+  violations?: string[];       // 改/删了不属于本阶段的文件（判失败）
+  overlappingStages?: string[]; // 与本次 run 时间重叠的并发阶段（其产出已计入允许范围）
+  note?: string;
 }
 
 export interface Stage {
@@ -165,6 +174,8 @@ export interface Stage {
   parallelizable: boolean;
   promptHint?: string;         // host 给的额外提示（注入 IOAC Action 段）
   validateRules?: ValidateRule[];  // 无则用默认
+  allowExtraFiles?: string[];  // 除 outputFile / _ 元数据外额外允许写的 glob（相对 cwd）
+  strictScope?: boolean;       // true = 新建多余文件也判失败（默认只警告）
   status: "pending" | "running" | "passed" | "failed" | "manual" | "skipped";
   session?: string;            // 执行 session 名
   currentRunId?: string;       // async 模式：正在跑的 runId（stage_collect 收割用），判定后清除
@@ -216,6 +227,8 @@ export interface StageCreateInput {
   parallelizable?: boolean;
   promptHint?: string;
   validateRules?: ValidateRule[];
+  allowExtraFiles?: string[];
+  strictScope?: boolean;
 }
 
 // stage_run 输入：host 可覆盖 hint 重试（manual 面板 retry_with_new_hint 落地）

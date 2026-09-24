@@ -86,6 +86,8 @@ function fixStage(s: any): Stage | null {
     parallelizable: !!s.parallelizable,
     promptHint: s.promptHint,
     validateRules: s.validateRules,
+    allowExtraFiles: Array.isArray(s.allowExtraFiles) ? s.allowExtraFiles : undefined,
+    strictScope: typeof s.strictScope === "boolean" ? s.strictScope : undefined,
     status: ["pending", "running", "passed", "failed", "manual", "skipped"].includes(s.status) ? s.status : "pending",
     session: s.session,
     currentRunId: typeof s.currentRunId === "string" ? s.currentRunId : undefined,

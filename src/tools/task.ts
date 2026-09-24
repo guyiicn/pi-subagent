@@ -4,12 +4,13 @@ import { TaskRegistry } from "../registry/task.js";
 import type { SessionRegistry } from "../registry/session.js";
 import type { RunRegistry } from "../registry/run.js";
 import type { ProcessTable } from "../runner/process-table.js";
-import { delegate, type DelegateDeps } from "./delegate.js";
+import { delegate, type DelegateDeps, type DelegateInput } from "./delegate.js";
 import { status } from "./status.js";
 import { validateFile, validateFiles, splitOutputFiles } from "../runner/validate.js";
 import { buildStagePrompt, buildReviewPrompt } from "./stage-prompt.js";
+import { snapshotDir, diffSnapshots, checkScope, MAX_SNAPSHOT_FILES, type DirSnapshot } from "../runner/scope.js";
 import { Errors } from "../errors.js";
-import type { Task, Stage, StageAttempt, StageCreateInput, ManualPanel, Constraints, Snapshot, StageRunInput } from "../types.js";
+import type { Task, Stage, StageAttempt, StageCreateInput, ManualPanel, Constraints, Snapshot, StageRunInput, StageScopeResult } from "../types.js";
 
 export interface TaskDeps {
   tasks: TaskRegistry;
@@ -150,6 +151,7 @@ export async function taskStageRun(
   runId?: string;          // async 模式：返回 runId，host 用 stage_collect 收割
   attempts: StageAttempt[];
   manualPanel?: ManualPanel;
+  scopeWarnings?: string[];
 }> {
   const task = deps.tasks.get(input.taskId);
   if (!task) throw Errors.taskNotFound(input.taskId);
@@ -195,7 +197,7 @@ export async function taskStageRun(
       promptHintOverride: hintOverride,
       attemptLimit: baseAttemptNo + maxAttempts,
     });
-    const r = await delegate(
+    const r = await launchStageRun(
       {
         prompt: buildStagePrompt(stage, task, attemptNo, lastFailureOf(stage), hintOverride),
         session: sessionName,
@@ -206,7 +208,7 @@ export async function taskStageRun(
         stallTimeoutMs: input.stallTimeoutMs,
         runTimeoutMs: input.runTimeoutMs,
       },
-      deps as DelegateDeps,
+      deps, task, stage,
     );
     // 记录 currentRunId 供 stage_collect 收割
     deps.tasks.setStageCurrentRunId(input.taskId, input.stageId, r.runId);
@@ -230,6 +232,7 @@ export async function taskStageCollect(
   runId?: string;          // 自动重派后返回新 runId
   attempts: StageAttempt[];
   manualPanel?: ManualPanel;
+  scopeWarnings?: string[];
 }> {
   const task = deps.tasks.get(input.taskId);
   if (!task) throw Errors.taskNotFound(input.taskId);
@@ -253,7 +256,7 @@ export async function taskStageCollect(
 
   // run 已完成 → 判定 + 可能需要重试（沿用 stage_run 发起时的参数；旧数据无 runOptions 则用默认）
   const opts = stage.runOptions ?? { constraints: { noSkills: true, noContextFiles: true }, attemptLimit: 3 };
-  const verdict = await judgeAttempt(run, stage.outputFile ?? "", task.cwd, stage);
+  const { verdict, scope } = await judgeWithScope(run, task, stage);
   const attempt: StageAttempt = {
     attemptNo: (stage.attempts.at(-1)?.attemptNo ?? 0) + 1,
     runId: run.runId,
@@ -261,6 +264,7 @@ export async function taskStageCollect(
     failureType: verdict.passed ? undefined : verdict.failureType,
     failureDetail: verdict.passed ? "" : verdict.detail,
     ts: Date.now(),
+    scope,
   };
   deps.tasks.addAttempt(input.taskId, input.stageId, attempt);
 
@@ -269,7 +273,7 @@ export async function taskStageCollect(
     deps.tasks.setStageStatus(input.taskId, input.stageId, "passed");
     if (deps.tasks.allStagesPassed(input.taskId)) deps.tasks.setTaskStatus(input.taskId, "completed");
     deps.onTaskChange?.();
-    return { stage: deps.tasks.getStage(input.taskId, input.stageId)!, outcome: "passed", attempts: stage.attempts };
+    return { stage: deps.tasks.getStage(input.taskId, input.stageId)!, outcome: "passed", attempts: stage.attempts, ...scopeWarnings(scope) };
   }
 
   // 失败：继续发下一次（新 session 名防历史混入）
@@ -277,7 +281,7 @@ export async function taskStageCollect(
   if (attemptNo <= opts.attemptLimit) {
     deps.tasks.setStageCurrentRunId(input.taskId, input.stageId, undefined);
     deps.tasks.setStageStatus(input.taskId, input.stageId, "running", `${input.taskId}-${input.stageId}-a${attemptNo}`);
-    const r = await delegate(
+    const r = await launchStageRun(
       {
         prompt: buildStagePrompt(
           stage, task, attemptNo,
@@ -292,7 +296,7 @@ export async function taskStageCollect(
         stallTimeoutMs: opts.stallTimeoutMs,
         runTimeoutMs: opts.runTimeoutMs,
       },
-      deps as DelegateDeps,
+      deps, task, stage,
     );
     deps.tasks.setStageCurrentRunId(input.taskId, input.stageId, r.runId);
     return { stage: deps.tasks.getStage(input.taskId, input.stageId)!, outcome: "running", runId: r.runId, attempts: stage.attempts };
@@ -329,7 +333,7 @@ async function runStageAttempts(
   hintOverride: string | undefined,
   maxAttempts: number,
   constraints: Constraints,
-): Promise<{ stage: Stage; outcome: "passed" | "manual"; attempts: StageAttempt[]; manualPanel?: ManualPanel }> {
+): Promise<{ stage: Stage; outcome: "passed" | "manual"; attempts: StageAttempt[]; manualPanel?: ManualPanel; scopeWarnings?: string[] }> {
   // 已有 attempts（如 manual 后重试）→ attemptNo 接续，不重置
   const baseAttemptNo = stage.attempts.at(-1)?.attemptNo ?? 0;
   for (let attemptNo = baseAttemptNo + 1; attemptNo <= baseAttemptNo + maxAttempts; attemptNo++) {
@@ -344,7 +348,7 @@ async function runStageAttempts(
 
     const prompt = buildStagePrompt(stage, task, attemptNo, prevFailure, hintOverride);
 
-    const r = await delegate(
+    const r = await launchStageRun(
       {
         prompt,
         session: sessionName,
@@ -355,14 +359,14 @@ async function runStageAttempts(
         stallTimeoutMs: input.stallTimeoutMs,
         runTimeoutMs: input.runTimeoutMs,
       },
-      deps as DelegateDeps,
+      deps, task, stage,
     );
 
     // 等完成
     const done = await deps.runs.waitForCompletion(r.runId, (input.runTimeoutMs ?? 600000) + 10000);
 
     // 判定 + 验收（多文件 outputFile 支持逗号分隔，P0 问题2）
-    const verdict = await judgeAttempt(done, stage.outputFile ?? "", task.cwd, stage);
+    const { verdict, scope } = await judgeWithScope(done, task, stage, r.runId);
     const attempt: StageAttempt = {
       attemptNo,
       runId: r.runId,
@@ -370,6 +374,7 @@ async function runStageAttempts(
       failureType: verdict.passed ? undefined : verdict.failureType,
       failureDetail: verdict.passed ? "" : verdict.detail,
       ts: Date.now(),
+      scope,
     };
     deps.tasks.addAttempt(input.taskId, input.stageId, attempt);
 
@@ -380,7 +385,7 @@ async function runStageAttempts(
         deps.tasks.setTaskStatus(input.taskId, "completed");
       }
       deps.onTaskChange?.();
-      return { stage: deps.tasks.getStage(input.taskId, input.stageId)!, outcome: "passed", attempts: stage.attempts };
+      return { stage: deps.tasks.getStage(input.taskId, input.stageId)!, outcome: "passed", attempts: stage.attempts, ...scopeWarnings(scope) };
     }
     // 失败：进下一次（循环自动用上次失败拼升级 prompt）
   }
@@ -412,7 +417,114 @@ function lastFailureOf(stage: Stage): { failureType: StageAttempt["failureType"]
   return last && last.failureType ? { failureType: last.failureType, failureDetail: last.failureDetail } : undefined;
 }
 
+// ============ 写入范围追踪 ============
+// run 前快照 cwd，run 结束那一刻再快照（而非收割时——async 收割可能滞后，期间别的阶段写的文件会混入）。
+// 快照只在内存：server 重启后该 run 的 scope 记为未检查，不误判。
+interface ScopeRecord {
+  taskId: string;
+  stageId: string;
+  runId: string;
+  start: number;
+  end?: number;
+  before: DirSnapshot;
+  after?: DirSnapshot;
+  done: Promise<void>;
+}
+const scopeRecords = new Map<string, ScopeRecord>();
+const WINDOW_RETAIN_MS = 3600_000;
+
+async function launchStageRun(input: DelegateInput, deps: TaskDeps, task: Task, stage: Stage): Promise<{ runId: string }> {
+  const before = snapshotDir(task.cwd);
+  const start = Date.now();
+  const r = await delegate(input, deps as DelegateDeps);
+  const rec: ScopeRecord = { taskId: task.taskId, stageId: stage.stageId, runId: r.runId, start, before, done: Promise.resolve() };
+  rec.done = waitRunEnd(deps.runs, r.runId).then(() => {
+    rec.after = snapshotDir(task.cwd);
+    rec.end = Date.now();
+  });
+  scopeRecords.set(r.runId, rec);
+  pruneScopeRecords();
+  return { runId: r.runId };
+}
+
+async function waitRunEnd(runs: RunRegistry, runId: string): Promise<void> {
+  for (;;) {
+    const r = await runs.waitForCompletion(runId, 60_000);
+    if (!r || r.status !== "running") return;
+  }
+}
+
+// 结束的记录保留一段时间，作为并发重叠判断的时间窗口，之后清掉
+function pruneScopeRecords(): void {
+  const now = Date.now();
+  for (const [id, r] of scopeRecords) if (r.end && now - r.end > WINDOW_RETAIN_MS) scopeRecords.delete(id);
+}
+
+async function evaluateScope(runId: string, task: Task, stage: Stage): Promise<StageScopeResult> {
+  const rec = scopeRecords.get(runId);
+  if (!rec) return { checked: false, note: "无 run 前快照（server 重启或非本进程发起），未检查" };
+  await rec.done;
+  if (rec.before.truncated || rec.after!.truncated) {
+    return { checked: false, note: `任务目录文件数超过 ${MAX_SNAPSHOT_FILES}，未检查` };
+  }
+  // 与本 run 时间窗口重叠的同任务其他阶段：其产出计入允许范围（并行阶段共享 cwd，否则会互相误报）
+  const overlapping = new Set<string>();
+  for (const o of scopeRecords.values()) {
+    if (o.taskId !== rec.taskId || o.stageId === rec.stageId) continue;
+    if (o.start < rec.end! && (o.end ?? Infinity) > rec.start) overlapping.add(o.stageId);
+  }
+  const allowStages = [stage, ...task.stages.filter((s) => overlapping.has(s.stageId))];
+  // 本阶段之前 attempt 自己新建的多余文件，后续 attempt 清理/改写属正常，不算违规
+  const ownPriorStray = stage.attempts.flatMap((a) => a.scope?.stray ?? []);
+  const check = checkScope(diffSnapshots(rec.before, rec.after!), {
+    cwd: task.cwd,
+    outputFiles: [
+      ...allowStages.flatMap((s) => (s.outputFile ? splitOutputFiles(s.outputFile, task.cwd) : [])),
+      ...ownPriorStray,
+    ],
+    allowExtraFiles: allowStages.flatMap((s) => s.allowExtraFiles ?? []),
+  });
+  return {
+    checked: true,
+    stray: check.stray,
+    violations: check.violations,
+    ...(overlapping.size ? { overlappingStages: [...overlapping].sort() } : {}),
+  };
+}
+
+// 判定 + 写入范围检查。violation（改/删不属于本阶段的文件）一律判失败；stray 仅 strictScope 时判失败
+async function judgeWithScope(
+  done: { runId?: string; status?: string; error?: { code?: string }; result?: string } | undefined,
+  task: Task,
+  stage: Stage,
+  runId = done?.runId ?? "",
+): Promise<{ verdict: { passed: boolean; failureType?: StageAttempt["failureType"]; detail: string }; scope: StageScopeResult }> {
+  const verdict = await judgeAttempt(done, stage.outputFile ?? "", task.cwd, stage);
+  const scope = await evaluateScope(runId, task, stage);
+  const problems = [
+    ...(scope.violations ?? []),
+    ...(stage.strictScope ? (scope.stray ?? []).map((p) => `created: ${p}`) : []),
+  ];
+  if (problems.length > 0) {
+    const scopeDetail = `写了本阶段范围外的文件：${problems.join(", ")}`;
+    return {
+      verdict: {
+        passed: false,
+        failureType: "scope_violation",
+        detail: verdict.passed ? scopeDetail : `${scopeDetail}；另：${verdict.detail}`,
+      },
+      scope,
+    };
+  }
+  return { verdict, scope };
+}
+
+function scopeWarnings(scope: StageScopeResult): { scopeWarnings?: string[] } {
+  return scope.stray?.length ? { scopeWarnings: scope.stray.map((p) => `新建了 outputFile 以外的文件（未删除，请 host 确认）：${p}`) } : {};
+}
+
 // 判定单次 attempt：综合 run 终态 + 文件验收（支持多文件 outputFile）
+
 async function judgeAttempt(
   done: { status?: string; error?: { code?: string }; result?: string } | undefined,
   outputSpec: string,

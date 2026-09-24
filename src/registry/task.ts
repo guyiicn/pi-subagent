@@ -39,6 +39,8 @@ export class TaskRegistry {
       parallelizable: s.parallelizable ?? false,
       promptHint: s.promptHint,
       validateRules: s.validateRules,
+      allowExtraFiles: s.allowExtraFiles,
+      strictScope: s.strictScope,
       status: "pending" as const,
       attempts: [],
     }));
