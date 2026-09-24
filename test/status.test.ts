@@ -46,3 +46,26 @@ test("waitTimeoutMs=0 → 立即返回 running", async () => {
   const out = await status({ runId: r.runId, waitTimeoutMs: 0 }, runs);
   assert.equal(out.status, "running");
 });
+
+// ===== [待实现] 运行中也返回已记录的 progress =====
+// 现状：run 仍 running 时，status 只返回 { runId, session, status: "running" }，
+// RunRegistry 里已流式记录（且已脱敏）的 progress 完全不可见，host 无法判断 Pi 是否在推进。
+
+test("[待实现] running + waitTimeoutMs=0 → 返回已记录的 progress", async () => {
+  const runs = new RunRegistry();
+  const r = runs.create({ session: "a", startedAt: 1 });
+  runs.appendProgress(r.runId, { ts: 2, tool: "write", summary: "Successfully wrote to a.py" });
+  const out = await status({ runId: r.runId, waitTimeoutMs: 0 }, runs);
+  assert.equal(out.status, "running");
+  assert.deepEqual(out.progress?.map((p) => p.tool), ["write"]);
+  assert.equal(out.progressTruncated, false);
+});
+
+test("running + long-poll 超时 → 返回超时那一刻的 progress（现已满足，防回归）", async () => {
+  const runs = new RunRegistry();
+  const r = runs.create({ session: "a", startedAt: 1 });
+  setTimeout(() => runs.appendProgress(r.runId, { ts: 3, tool: "bash", summary: "ok" }), 20);
+  const out = await status({ runId: r.runId, waitTimeoutMs: 100 }, runs);
+  assert.equal(out.status, "running");
+  assert.deepEqual(out.progress?.map((p) => p.tool), ["bash"]);
+});

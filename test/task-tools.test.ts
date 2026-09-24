@@ -444,3 +444,18 @@ test("scope：无 run 前快照（如 server 重启后收割）→ checked=false
   });
   c.cleanup();
 });
+
+// ===== [待实现] stage_collect 在 running 时也带出当前 run 的 progress =====
+test("[待实现] stage_collect running → 返回当前 run 已记录的 progress", async () => {
+  const c = setupTaskDir();
+  await withEnv({ ...fakePiEnv("stall"), FAKE_TOOL_TEXT: "wrote skeleton" }, async () => {
+    const { d } = deps();
+    await createTask(d, c.dir);
+    await taskStageRun({ taskId: "t1", stageId: "1", mode: "async", stallTimeoutMs: 60000 }, d);
+    const res: any = await taskStageCollect({ taskId: "t1", stageId: "1", waitTimeoutMs: 500 }, d);
+    assert.equal(res.outcome, "running");
+    assert.deepEqual(res.progress?.map((p: any) => p.summary), ["wrote skeleton"]);
+    await drain(d);
+  });
+  c.cleanup();
+});
