@@ -46,6 +46,7 @@ export function buildStagePrompt(
   lines.push("【约束】");
   lines.push("- 不要联网搜索，所有需要的资料已在输入文件中。");
   lines.push(`- 只写这一个文件：${output}。不要修改其他任何文件。`);
+  lines.push("- 自测用的临时文件（样例输入、停用词表等）写到系统临时目录（如 /tmp），不要留在任务目录。");
   lines.push("");
   lines.push("【工作节奏（必须遵守，否则会被判停滞中止）】");
   lines.push("- 第1步：read 输入文件。");
@@ -87,6 +88,8 @@ export function buildUpgradeHint(
       return `上次失败：超时（可能是步骤过多或卡住）。本次请减少步骤：先写最小可用版本落盘，再迭代。不要在单步上反复。`;
     case "stalled":
       return `上次失败：长时间无进展被中止（疑似卡在某工具调用）。本次每完成一步就推进，避免在单一操作上停滞。`;
+    case "scope_violation":
+      return `上次失败：写了本阶段范围外的文件（${failureDetail}）。本阶段只允许写输出文件；其他文件（含前面阶段的产出）一律不要改动、不要删除，临时文件放 /tmp。若认为必须改别的文件，在最终回复里说明原因，不要自己动手。`;
     case "pi_refused":
       return `上次失败：你表示无法完成（${failureDetail}）。材料已在输入文件中。请基于已有材料直接产出，不要要求更多信息。`;
     default:

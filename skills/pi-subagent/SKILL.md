@@ -153,6 +153,14 @@ MCP host（ZCode）对单次工具调用有 30s 硬超时。`pi_status` 默认 `
 - 验收器对每个文件独立检查（全部存在+无 TODO 才算 passed）。
 - 也支持绝对路径：`"/abs/a.html, rel/b.css"`。
 
+**写入范围检查（每次 stage 执行自动做）：**
+- 工具在每次 attempt 前后对任务 cwd 做快照 diff（忽略 `.git`/`node_modules`/`__pycache__`/`*.pyc`），结果在 `attempt.scope`。
+- 允许写：本阶段 outputFile、`_` 开头元数据、stage 的 `allowExtraFiles`（glob，如 `"fixtures/"`、`"**/*.snap"`）、与本次 run 时间重叠的并发阶段的产出、本阶段之前 attempt 自己新建的文件。
+- **新建多余文件**（`scope.stray`）：默认只警告，stage 照常 passed，返回值带 `scopeWarnings`。**工具不会删文件**——host 看到警告要判断是垃圾还是有用产物；清理属于"改文件"，按代码修改权规则委派 Pi 删，或在后续 stage 的 promptHint 里交代。
+- **改/删了不属于本阶段的既有文件**（`scope.violations`，如测试阶段改了阶段1的核心模块）：判 `scope_violation` 失败并重派。注意被改动的内容**不会回滚**，manual 时要人工核对该文件。
+- 需要严格隔离时，stage 设 `strictScope: true`：新建多余文件也判失败。
+- `scope.checked=false`：server 重启后收割（快照只在内存）或目录超 5000 文件，未检查，不代表没问题。
+
 **工具名生成后自检（防串名事故）：**
 - 调用工具前，确认该工具名出现在"本任务相关工具清单"里。
 - 任务不含视觉/图像分析需求时，`analyze_image` / `mcp__4_5v_mcp__*` 等图像工具绝不应被调用。

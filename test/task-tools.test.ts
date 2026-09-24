@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { SessionRegistry } from "../src/registry/session.js";
 import { RunRegistry } from "../src/registry/run.js";
 import { ProcessTable } from "../src/runner/process-table.js";
 import { TaskRegistry } from "../src/registry/task.js";
 import { taskCreate, taskList, taskStageRun, taskStageCollect, taskPlan, applyReviewResult } from "../src/tools/task.js";
+import { delegate } from "../src/tools/delegate.js";
 import { fakePiEnv, tmpCwd, withEnv } from "./helpers.js";
 
 function deps() {
@@ -350,6 +351,96 @@ test("结果含拒绝词但产出验收通过 → passed（不误判 pi_refused�
     await createTask(d, c.dir);
     const r = await taskStageRun({ taskId: "t1", stageId: "1", maxAttempts: 1 }, d);
     assert.equal(r.outcome, "passed");
+  });
+  c.cleanup();
+});
+
+// ===== 写入范围检查 =====
+test("scope：新建多余文件 → 默认只警告，stage 仍 passed，文件不删", async () => {
+  const c = setupTaskDir();
+  await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/1.html`, FAKE_EXTRA_FILE: `${c.dir}/sw.txt` }, async () => {
+    const { d } = deps();
+    await createTask(d, c.dir);
+    const r = await taskStageRun({ taskId: "t1", stageId: "1" }, d);
+    assert.equal(r.outcome, "passed");
+    assert.deepEqual(r.attempts[0].scope?.stray, ["sw.txt"]);
+    assert.equal(r.attempts[0].scope?.checked, true);
+    assert.equal(r.scopeWarnings?.length, 1);
+    assert.ok(existsSync(`${c.dir}/sw.txt`));
+  });
+  c.cleanup();
+});
+
+test("scope：strictScope 下新建多余文件 → scope_violation 重派；重派时覆写自己上次的文件不算违规", async () => {
+  const c = setupTaskDir();
+  await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/1.html`, FAKE_EXTRA_FILE: `${c.dir}/sw.txt` }, async () => {
+    const { d } = deps();
+    await createTask(d, c.dir, {
+      stages: [{ stageId: "1", title: "t", objective: "o", inputFiles: [], outputFile: "1.html", dependsOn: [], parallelizable: true, strictScope: true }],
+    });
+    const r = await taskStageRun({ taskId: "t1", stageId: "1" }, d);
+    assert.equal(r.attempts[0].failureType, "scope_violation");
+    assert.match(r.attempts[0].failureDetail, /created: sw\.txt/);
+    assert.equal(r.outcome, "passed");
+    assert.equal(r.attempts.length, 2);
+  });
+  c.cleanup();
+});
+
+test("scope：修改不属于本阶段的既有文件 → scope_violation（即使产出验收通过）", async () => {
+  const c = setupTaskDir();
+  writeFileSync(`${c.dir}/core.py`, "x = 1\n");
+  await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/1.html`, FAKE_TOUCH_FILE: `${c.dir}/core.py` }, async () => {
+    const { d } = deps();
+    await createTask(d, c.dir);
+    const r = await taskStageRun({ taskId: "t1", stageId: "1", maxAttempts: 1 }, d);
+    assert.equal(r.outcome, "manual");
+    assert.equal(r.attempts[0].failureType, "scope_violation");
+    assert.deepEqual(r.attempts[0].scope?.violations, ["modified: core.py"]);
+  });
+  c.cleanup();
+});
+
+test("scope：并行阶段共享 cwd，对方产出不算自己的 stray", async () => {
+  const c = setupTaskDir();
+  const { d } = deps();
+  await withEnv(fakePiEnv("stage_success"), async () => {
+    await createTask(d, c.dir, {
+      stages: [
+        { stageId: "a", title: "a", objective: "o", inputFiles: [], outputFile: "a.html", dependsOn: [], parallelizable: true },
+        { stageId: "b", title: "b", objective: "o", inputFiles: [], outputFile: "b.html", dependsOn: [], parallelizable: true },
+      ],
+    });
+  });
+  await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/a.html`, FAKE_SLEEP: "1" }, async () => {
+    await taskStageRun({ taskId: "t1", stageId: "a", mode: "async" }, d);
+  });
+  await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/b.html`, FAKE_SLEEP: "1" }, async () => {
+    await taskStageRun({ taskId: "t1", stageId: "b", mode: "async" }, d);
+  });
+  const ra = await taskStageCollect({ taskId: "t1", stageId: "a", waitTimeoutMs: 8000 }, d);
+  const rb = await taskStageCollect({ taskId: "t1", stageId: "b", waitTimeoutMs: 8000 }, d);
+  for (const [r, other] of [[ra, "b"], [rb, "a"]] as const) {
+    assert.equal(r.outcome, "passed");
+    assert.deepEqual(r.attempts[0].scope?.stray, []);
+    assert.deepEqual(r.attempts[0].scope?.overlappingStages, [other]);
+  }
+  c.cleanup();
+});
+
+test("scope：无 run 前快照（如 server 重启后收割）→ checked=false，不误判", async () => {
+  const c = setupTaskDir();
+  await withEnv({ ...fakePiEnv("stage_success"), FAKE_OUTPUT_FILE: `${c.dir}/1.html`, FAKE_EXTRA_FILE: `${c.dir}/sw.txt` }, async () => {
+    const { d, tasks } = deps();
+    await createTask(d, c.dir);
+    // 绕过 stage_run 直接 delegate，模拟快照丢失的 run
+    const r = await delegate({ prompt: "p", session: "s-x", cwd: c.dir, goal: "g", mode: "async" }, d);
+    tasks.setStageStatus("t1", "1", "running", "s-x");
+    tasks.setStageCurrentRunId("t1", "1", r.runId);
+    const res = await taskStageCollect({ taskId: "t1", stageId: "1", waitTimeoutMs: 5000 }, d);
+    assert.equal(res.outcome, "passed");
+    assert.equal(res.attempts[0].scope?.checked, false);
+    assert.equal(res.scopeWarnings, undefined);
   });
   c.cleanup();
 });

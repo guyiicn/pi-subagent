@@ -161,6 +161,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 dependsOn: { type: "array", items: { type: "string" } },
                 parallelizable: { type: "boolean" },
                 promptHint: { type: "string" },
+                allowExtraFiles: {
+                  type: "array", items: { type: "string" },
+                  description: "除 outputFile 与 _ 开头元数据外，本阶段允许写的额外文件 glob（相对 cwd，支持 * ** ?，以 / 结尾表示目录）",
+                },
+                strictScope: {
+                  type: "boolean",
+                  description: "true = 新建多余文件也判失败重派；默认 false 只在 attempt.scope.stray 里警告",
+                },
                 validateRules: {
                   type: "array",
                   items: {
